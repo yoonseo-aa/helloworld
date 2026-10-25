@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.helloworld.domain.notification.mapper.NotificationMapper">
+
+    <!--
+      같은 알림이 이미 있는지 확인 (중복 방지용).
+
+      중복을 막는 이유: 좋아요·팔로우는 토글이라 취소하고 다시 누를 수 있고, 그때마다 알림이
+      쌓이면 목록이 같은 줄로 도배된다. "A가 내 글에 좋아요"는 몇 번 눌렀든 한 줄이면 된다.
+
+      UNIQUE 인덱스로 막지 않는 이유: target_post_id / target_comment_id 가 NULL이라
+      (FOLLOW는 둘 다 NULL) MySQL UNIQUE는 NULL을 서로 다른 값으로 취급해 중복을 막지 못한다.
+      NULL-safe 비교(<=>)를 쓴 이 조회가 그 자리를 대신한다.
+
+      ⚠️ 확인과 INSERT를 한 문장으로 합치지 않는다 (INSERT ... SELECT ... WHERE NOT EXISTS).
+      그 형태는 알림을 넣으면서 같은 테이블을 읽어 공유 락을 잡기 때문에, 같은 사람에게 가는
+      알림이 동시에 들어오면 서로의 갭을 기다리다 데드락이 난다.
+      실제로 10명이 같은 게시물에 동시에 좋아요를 눌렀을 때 6건이 데드락으로 유실됐다
+      (알림 실패는 삼켜지므로 사용자에게도, 응답에도 드러나지 않아 로그만 남았다).
+      락을 잡지 않는 일반 조회 + 일반 INSERT로 나누면 데드락 자체가 사라진다(10건 모두 생성 확인).
+
+      대신 확인과 INSERT 사이에 경쟁 구간이 생긴다 — 같은 사람의 요청이 동시에 여러 개 들어오면
+      전부 "없음"으로 읽고 각자 넣어, 동시 요청 수만큼 중복이 생길 수 있다(동시 5회 → 3건 실측).
+      감수하는 이유:
+        - 순차 요청은 정확히 1건이다(연타 10회 → 1건 실측). 사람이 버튼을 누르는 속도로는
+          요청이 순차로 들어오므로 실사용에서 이 구간에 걸리기 어렵다.
+        - 걸려도 결과는 목록에 같은 줄이 하나 더 보이는 것뿐이다. 유실과 달리 되돌릴 수 있고,
+          알림을 놓치는 것보다 가볍다.
+      완전히 막으려면 UNIQUE 인덱스가 필요하고, NULL 때문에 생성 컬럼
+      (COALESCE(target_post_id,0) 등을 합친 dedupe_key)을 추가하는 스키마 변경이 따라온다.
+      스키마 변경은 배포 순서 조율이 필요해 별도 결정 사항으로 남겨 둔다.
+    -->
+    <select id="existsSame" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1 FROM notifications
+            WHERE recipient_id = #{recipientId}
+              AND actor_id = #{actorId}
+              AND type = #{type}
+              AND target_post_id &lt;=&gt; #{targetPostId}
+              AND target_comment_id &lt;=&gt; #{targetCommentId}
+        )
+    </select>
+
+    <!-- 일반 INSERT. 서로 다른 행을 넣는 요청끼리는 락을 다투지 않아 동시에 들어와도 안전하다 -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="notificationId">
+        INSERT INTO notifications (recipient_id, actor_id, type, target_post_id, target_comment_id, created_at)
+        VALUES (#{recipientId}, #{actorId}, #{type}, #{targetPostId}, #{targetCommentId}, NOW())
+    </insert>
+
+    <!--
+      알림 목록. actor 정보(닉네임·프로필 이미지)를 JOIN으로 함께 가져온다(N+1 방지).
+      화면에 "누가 했는지"가 알림의 핵심이라 이 조인은 항상 필요하다.
+
+      정렬·커서 모두 notification_id 를 쓴다. created_at 은 같은 초에 여러 건이 생기면
+      순서가 흔들려 커서 경계에서 누락·중복이 생긴다(채팅 메시지에서 같은 이유로 겪었다).
+
+      idx_notifications_recipient (recipient_id, is_read, created_at) 가 recipient_id 로
+      범위를 좁혀준다. 정렬 키가 notification_id 라 그 인덱스로 정렬까지 받지는 못하지만,
+      한 사람의 알림 건수는 작아서 문제되지 않는다.
+    -->
+    <!--
+      목록 조회와 단건 조회가 같은 컬럼·같은 조인을 쓴다. 한쪽만 필드를 추가하면
+      목록과 실시간 push의 형태가 갈리므로 조각으로 묶어 공유한다.
+    -->
+    <sql id="notificationSelect">
+        SELECT n.notification_id   AS notificationId,
+               n.type              AS type,
+               n.is_read           AS isRead,
+               n.target_post_id    AS targetPostId,
+               n.target_comment_id AS targetCommentId,
+               n.created_at        AS createdAt,
+               u.user_id           AS actorId,
+               u.nickname          AS actorNickname,
+               u.profile_image_url AS actorProfileImageUrl
+        FROM notifications n
+        JOIN users u ON u.user_id = n.actor_id
+    </sql>
+
+    <!--
+      단건 조회 (실시간 push 전용).
+      recipient_id 조건을 함께 두어 남의 알림이 잘못 실려 나가는 것을 구조적으로 막는다.
+    -->
+    <select id="selectOne" resultType="com.helloworld.domain.notification.dto.response.NotificationResponse">
+        <include refid="notificationSelect"/>
+        WHERE n.notification_id = #{notificationId}
+          AND n.recipient_id = #{recipientId}
+    </select>
+
+    <select id="selectByRecipient" resultType="com.helloworld.domain.notification.dto.response.NotificationResponse">
+        <include refid="notificationSelect"/>
+        WHERE n.recipient_id = #{recipientId}
+        <if test="unreadOnly">
+            AND n.is_read = FALSE
+        </if>
+        <if test="cursor != null">
+            AND n.notification_id &lt; #{cursor}
+        </if>
+        ORDER BY n.notification_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="countUnread" resultType="int">
+        SELECT COUNT(*)
+        FROM notifications
+        WHERE recipient_id = #{recipientId}
+          AND is_read = FALSE
+    </select>
+
+    <!--
+      읽음 처리. recipient_id 조건이 곧 권한 검사다 —
+      남의 알림 id를 넣어도 조건에 걸려 0행이 되므로 조회를 한 번 더 하지 않아도 된다.
+      이미 읽은 알림에 다시 요청해도 0행이 되어 멱등하다.
+    -->
+    <update id="markAsRead">
+        UPDATE notifications
+        SET is_read = TRUE
+        WHERE notification_id = #{notificationId}
+          AND recipient_id = #{recipientId}
+          AND is_read = FALSE
+    </update>
+
+</mapper>

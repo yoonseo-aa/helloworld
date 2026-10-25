@@ -1,0 +1,175 @@
+### =====================================================================
+### 댓글 API 테스트 (IntelliJ HTTP Client)
+### 사용법: 앱 실행(local, 8080) 후 위에서부터 순서대로 초록 ▶ 클릭.
+### 로그인 토큰과 생성된 id는 client.global.set으로 다음 요청에 자동 전달된다.
+### 전제: MySQL + Redis 실행 중.
+### =====================================================================
+
+### ① 작성자 계정 회원가입 (이미 있으면 409 — 무시하고 ②로)
+POST http://localhost:8080/api/users
+Content-Type: application/json
+
+{
+  "email": "comment-author@test.com",
+  "password": "test1234!"
+}
+
+### ② 작성자 로그인 → {{token}}
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "comment-author@test.com",
+  "password": "test1234!"
+}
+
+> {%
+    client.global.set("token", response.body.data.access_token);
+%}
+
+### ③ 댓글 달 게시물 생성 → {{postId}}
+POST http://localhost:8080/api/posts
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "post_type": "PROJECT",
+  "content": "댓글 테스트용 게시물",
+  "tech_stacks": ["Spring Boot"]
+}
+
+> {%
+    client.global.set("postId", response.body.data.post_id);
+%}
+
+### ④ 댓글 생성 → 201, {{commentId}} 저장
+POST http://localhost:8080/api/posts/{{postId}}/comments
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "content": "첫 번째 댓글입니다."
+}
+
+> {%
+    client.test("201 Created", () => client.assert(response.status === 201));
+    client.global.set("commentId", response.body.data.comment_id);
+%}
+
+### ⑤ 댓글 하나 더 생성 (목록·페이징 확인용)
+POST http://localhost:8080/api/posts/{{postId}}/comments
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "content": "두 번째 댓글입니다."
+}
+
+### ⑥ 목록 조회 → items 2건, total_count 2, is_mine 이 모두 true 여야 정상
+GET http://localhost:8080/api/posts/{{postId}}/comments?page=0&size=20
+Authorization: Bearer {{token}}
+
+> {%
+    client.test("2건 조회", () => client.assert(response.body.data.total_count === 2));
+%}
+
+### ⑦ 댓글 수정 → 200
+PATCH http://localhost:8080/api/comments/{{commentId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "content": "수정된 댓글입니다."
+}
+
+### ⑧ 수정 확인 (첫 댓글 content가 바뀌고 updated_at이 갱신되어야 함)
+GET http://localhost:8080/api/posts/{{postId}}/comments?page=0&size=20
+Authorization: Bearer {{token}}
+
+### ⑨ 빈 내용으로 생성 → 400 COMMON_INVALID_PARAM 이 나야 정상
+POST http://localhost:8080/api/posts/{{postId}}/comments
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "content": "   "
+}
+
+### ⑩ 없는 게시물에 댓글 → 404 POST_NOT_FOUND 가 나야 정상
+POST http://localhost:8080/api/posts/99999999/comments
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "content": "없는 게시물"
+}
+
+### ⑪ 토큰 없이 생성 → 401 AUTH_001 이 나야 정상
+POST http://localhost:8080/api/posts/{{postId}}/comments
+Content-Type: application/json
+
+{
+  "content": "토큰 없음"
+}
+
+### =====================================================================
+### 남의 댓글은 수정·삭제할 수 없다 (403 COMMENT_FORBIDDEN)
+### =====================================================================
+
+### ⑫ 다른 사용자 회원가입 (이미 있으면 409 — 무시)
+POST http://localhost:8080/api/users
+Content-Type: application/json
+
+{
+  "email": "comment-stranger@test.com",
+  "password": "test1234!"
+}
+
+### ⑬ 다른 사용자 로그인 → {{otherToken}}
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "comment-stranger@test.com",
+  "password": "test1234!"
+}
+
+> {%
+    client.global.set("otherToken", response.body.data.access_token);
+%}
+
+### ⑭ 남의 댓글 수정 시도 → 403 COMMENT_FORBIDDEN 이 나야 정상
+PATCH http://localhost:8080/api/comments/{{commentId}}
+Authorization: Bearer {{otherToken}}
+Content-Type: application/json
+
+{
+  "content": "남의 댓글 수정 시도"
+}
+
+### ⑮ 남의 댓글 삭제 시도 → 403 COMMENT_FORBIDDEN 이 나야 정상
+DELETE http://localhost:8080/api/comments/{{commentId}}
+Authorization: Bearer {{otherToken}}
+
+### =====================================================================
+### 삭제 (soft delete)
+### =====================================================================
+
+### ⑯ 본인 댓글 삭제 → 200
+DELETE http://localhost:8080/api/comments/{{commentId}}
+Authorization: Bearer {{token}}
+
+### ⑰ 삭제 후 목록 → items 1건, total_count 1 이어야 정상
+GET http://localhost:8080/api/posts/{{postId}}/comments?page=0&size=20
+Authorization: Bearer {{token}}
+
+> {%
+    client.test("1건 남음", () => client.assert(response.body.data.total_count === 1));
+%}
+
+### ⑱ 이미 삭제된 댓글 재삭제 → 404 COMMENT_NOT_FOUND 가 나야 정상
+DELETE http://localhost:8080/api/comments/{{commentId}}
+Authorization: Bearer {{token}}
+
+### ⑲ (확인) posts.comment_count 도 1이어야 한다 — DB에서 직접 확인
+### docker exec -i helloworld-mysql mysql -uroot -phelloworld_dev_pw -e "use helloworld; select post_id, comment_count from posts order by post_id desc limit 3;"

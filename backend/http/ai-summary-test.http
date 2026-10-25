@@ -1,0 +1,355 @@
+### =====================================================================
+### 저장소 분석 · AI 요약 테스트 (IntelliJ HTTP Client)
+###
+### 흐름: 로그인 → 저장소 목록 → 저장소 분석 → 게시물 작성(요약 동봉) → 상세 조회
+###
+### ⚠️ ③ 이후는 순서대로 실행해야 한다. ③이 저장한 전역 변수를 ④~⑩이 쓴다.
+###
+### 전제
+###   - MySQL + Redis 실행 중, 앱 실행 중
+###   - application-local.yml 에 openai.api-key(GMS 키)가 최상위로 들어가 있음
+###       openai:
+###         api-key: <GMS 키>
+###     ⚠️ oauth: 안쪽에 넣으면 안 읽힌다. 들여쓰기 없이 최상위여야 한다.
+###   - ①의 계정 프로필에 GitHub 사용자명이 등록돼 있어야 ②에 목록이 뜬다
+###
+### ⚠️ ③번은 응답이 5~15초 걸린다. GitHub 왕복 2회 + LLM 호출이라 그렇다.
+###    멈춘 게 아니니 기다릴 것.
+###
+### 배포 서버로 쏘려면 http://localhost:8080 을
+### https://i15e204.p.ssafy.io 로 일괄 치환하면 된다.
+### =====================================================================
+
+### 0) 회원가입 — 이미 있는 계정이면 409가 나는데 그대로 넘어가면 된다.
+POST http://localhost:8080/api/users
+Content-Type: application/json
+
+{
+  "email": "test@test.com",
+  "password": "helloworld"
+}
+
+### 1) 로그인 → access_token 자동 저장
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@test.com",
+  "password": "helloworld"
+}
+
+> {%
+    // 로그인이 실패하면 data가 없어서 access_token을 꺼낼 때
+    // "Cannot read property of undefined"가 난다. 그 메시지는 원인을 알려주지
+    // 않으므로, 실제 응답을 로그로 남긴다.
+    if (response.status !== 200 || !response.body.data) {
+        client.log("로그인 실패 (" + response.status + "): " + JSON.stringify(response.body));
+        client.test("로그인 성공", () => client.assert(false,
+            "먼저 ⓪ 회원가입을 실행하거나, 본인 계정 이메일·비번으로 바꾸세요."));
+    } else {
+        client.global.set("access_token", response.body.data.access_token);
+        client.test("로그인 성공", () => client.assert(true));
+    }
+%}
+
+### 2) 저장소 목록
+### 프로필에 GitHub 사용자명이 없으면 빈 배열이다 — 오류가 아니다.
+GET http://localhost:8080/api/github/repos
+Authorization: Bearer {{access_token}}
+
+> {%
+    const repos = response.body.data ? response.body.data.repos : [];
+    client.test("200으로 응답", () => client.assert(response.status === 200));
+    client.log("저장소 " + repos.length + "건");
+    if (repos.length === 0) {
+        client.log("빈 목록 — 프로필에 GitHub 사용자명이 등록됐는지 확인하세요.");
+    } else {
+        client.log("첫 항목: " + repos[0].full_name + " (" + repos[0].language + ")");
+    }
+%}
+
+### 3) 저장소 분석  ← 핵심
+### 작성 폼에서 저장소를 고르는 순간 프론트가 부르는 API다.
+### tech_stacks(태그) + summary(AI 요약 패널) 을 준다. README 원문은 돌려주지 않는다 —
+### 요약을 만드는 재료로만 쓰고, 본문은 작성자가 직접 쓴다.
+###
+### ⚠️ 5~15초 걸린다. 진행 표시가 멈춰 보여도 기다릴 것.
+POST http://localhost:8080/api/posts/analyze
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "github_url": "https://github.com/yoonseo-aa/finance-compare-app"
+}
+
+> {%
+    const d = response.body.data;
+    client.test("200으로 응답", () => client.assert(response.status === 200));
+
+    client.log("tech_stacks = " + JSON.stringify(d.tech_stacks));
+    client.test("readme 를 돌려주지 않는다", () => client.assert(
+        d.readme === undefined,
+        "본문은 작성자 몫이다 — 응답에 readme 가 있으면 안 된다."));
+
+    const s = d.summary;
+    if (!s) {
+        client.log("요약 없음 — README 부족·저장소 접근 불가·LLM 실패 중 하나.");
+        client.log("백엔드 로그에서 '저장소 분석' 또는 'OpenAI' 로 검색할 것.");
+        client.test("요약 생성", () => client.assert(false, "요약이 만들어지지 않았습니다."));
+    } else {
+        client.global.set("one_liner", s.one_liner);
+        client.global.set("purpose", s.purpose);
+        client.global.set("key_features", JSON.stringify(s.key_features));
+        client.global.set("highlights", JSON.stringify(s.highlights));
+        client.log("one_liner   = " + s.one_liner);
+        client.log("purpose     = " + s.purpose);
+        client.log("key_features= " + JSON.stringify(s.key_features));
+        client.log("highlights  = " + JSON.stringify(s.highlights));
+        client.log("model       = " + s.model);
+
+        client.test("요약 생성", () => client.assert(true));
+        client.test("한국어로 나옴", () => client.assert(/[가-힣]/.test(s.one_liner),
+            "one_liner 에 한글이 없습니다 — 프롬프트가 무시됐을 수 있습니다."));
+        client.test("갓 만든 요약은 edited=false", () => client.assert(s.edited === false));
+        client.test("요약 안에 tech_stacks 가 없다", () => client.assert(
+            s.tech_stacks === undefined,
+            "태그는 게시물의 tech_stacks 로 따로 나간다 — 요약에 중복으로 넣지 않는다."));
+        client.test("언어가 앞에 온다", () => client.assert(d.tech_stacks[0] === "Vue",
+            "tech_stacks 첫 항목이 Vue 여야 합니다(바이트 1위 언어)."));
+        client.test("태그 8개 이하", () => client.assert(d.tech_stacks.length <= 8));
+
+        // ── 프로젝트 특징이 다른 칸의 재탕이 아닌지 ──
+        // 자동 판정은 어려우니 눈으로 볼 수 있게 나란히 찍는다.
+        client.log("── 겹침 확인: highlights vs 나머지 ──");
+        client.log("  key_features: " + s.key_features.join(" / "));
+        client.log("  highlights  : " + s.highlights.join(" / "));
+    }
+%}
+
+### 4) 게시물 작성 — 고치지 않은 요약을 그대로 보낸다
+### 사용자가 편집 폼을 열어보기만 하고 게시한 경우다. edited 는 false 여야 한다.
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "post_type": "PROJECT",
+  "content": "AI 요약 테스트용 게시물",
+  "github_url": "https://github.com/yoonseo-aa/finance-compare-app",
+  "tech_stacks": ["Django", "Vue"],
+  "summary": {
+    "one_liner": "{{one_liner}}",
+    "purpose": "{{purpose}}",
+    "key_features": {{key_features}},
+    "highlights": {{highlights}}
+  }
+}
+
+> {%
+    if (response.status !== 200 || !response.body.data) {
+        client.log("게시물 생성 실패 (" + response.status + "): " + JSON.stringify(response.body));
+        client.test("게시물 생성", () => client.assert(false));
+    } else {
+        client.global.set("post_id", response.body.data.post_id);
+        client.log("post_id = " + response.body.data.post_id);
+        client.test("게시물 생성", () => client.assert(true));
+    }
+%}
+
+### 5) 상세 조회 — 그대로 보냈으니 edited 가 false 여야 한다
+GET http://localhost:8080/api/posts/{{post_id}}
+Authorization: Bearer {{access_token}}
+
+> {%
+    const d = response.body.data;
+    const s = d ? d.summary : null;
+    client.test("요약이 저장됨", () => client.assert(!!s, "summary 키가 없습니다."));
+    if (s) {
+        client.log("one_liner = " + s.one_liner);
+        client.log("edited    = " + s.edited);
+        client.test("분석 결과와 동일", () => client.assert(
+            s.one_liner === client.global.get("one_liner")));
+        client.test("고치지 않았으므로 edited=false", () => client.assert(
+            s.edited === false,
+            "그대로 보냈는데 수정으로 판정됐습니다. 캐시(TTL 1시간)가 살아 있는지 확인하세요."));
+        client.test("태그는 게시물 쪽에 있다", () => client.assert(
+            Array.isArray(d.tech_stacks) && s.tech_stacks === undefined));
+    }
+%}
+
+### 6) 사용자가 고친 요약으로 게시 → edited 가 true 여야 한다
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "post_type": "PROJECT",
+  "content": "요약을 손으로 고친 게시물",
+  "github_url": "https://github.com/yoonseo-aa/finance-compare-app",
+  "summary": {
+    "one_liner": "사용자가 직접 고쳐 쓴 한 줄 소개입니다.",
+    "purpose": "{{purpose}}",
+    "key_features": {{key_features}},
+    "highlights": {{highlights}}
+  }
+}
+
+> {%
+    client.global.set("post_id_edited", response.body.data.post_id);
+    client.test("생성 성공", () => client.assert(response.status === 200));
+%}
+
+### 7) 위 게시물 상세 → edited=true, 고친 문구가 저장됐는지
+GET http://localhost:8080/api/posts/{{post_id_edited}}
+Authorization: Bearer {{access_token}}
+
+> {%
+    const s = response.body.data.summary;
+    client.test("고친 문구가 저장됨", () => client.assert(
+        s.one_liner === "사용자가 직접 고쳐 쓴 한 줄 소개입니다."));
+    client.test("edited=true", () => client.assert(s.edited === true,
+        "고쳤는데 수정으로 판정되지 않았습니다."));
+    client.test("generated_at 은 원본 그대로", () => client.assert(
+        !!s.generated_at,
+        "출처 정보는 서버가 채워야 합니다."));
+%}
+
+### 8) 요약 칸을 모두 비우면 저장하지 않는다
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "post_type": "PROJECT",
+  "content": "요약을 지운 게시물",
+  "github_url": "https://github.com/yoonseo-aa/finance-compare-app",
+  "summary": {
+    "one_liner": "",
+    "purpose": "",
+    "key_features": [],
+    "highlights": []
+  }
+}
+
+> {%
+    client.global.set("post_id_cleared", response.body.data.post_id);
+    client.test("생성 성공", () => client.assert(response.status === 200));
+%}
+
+### 9) 위 게시물 상세 → summary 키가 없어야 정상
+GET http://localhost:8080/api/posts/{{post_id_cleared}}
+Authorization: Bearer {{access_token}}
+
+> {%
+    client.test("요약 없음", () => client.assert(
+        response.body.data.summary == null,
+        "빈 요약이 껍데기로 저장됐습니다."));
+%}
+
+### 10) 길이 초과 → 400
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "post_type": "PROJECT",
+  "content": "길이 제한 확인",
+  "github_url": "https://github.com/yoonseo-aa/finance-compare-app",
+  "summary": {
+    "one_liner": "가나다라마바사아자차카타파하가나다라마바사아자차카타파하가나다라마바사아자차카타파하가나다라마바사아자차카타파하가나다라마바사아자차카타파하가나다라마바사아자차카타파하가나다라마바사아자차카타파하가나다라마바사아자차카타파하",
+    "purpose": "짧음",
+    "key_features": [],
+    "highlights": []
+  }
+}
+
+> {%
+    client.test("400", () => client.assert(response.status === 400,
+        "one_liner 150자 제한이 걸려야 합니다. 받은 상태: " + response.status));
+%}
+
+### =====================================================================
+### 여기부터는 경계 조건 확인
+### =====================================================================
+
+### 11) README가 거의 없는 저장소 → summary 키가 없어야 정상
+### tech_stacks 는 채워진다 — 언어는 LLM 없이도 확실한 값이라서다.
+POST http://localhost:8080/api/posts/analyze
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "github_url": "https://github.com/octocat/Hello-World"
+}
+
+> {%
+    client.test("200으로 응답", () => client.assert(response.status === 200));
+    client.test("요약 없음", () => client.assert(response.body.data.summary == null,
+        "README가 부족한 저장소인데 요약이 만들어졌습니다."));
+%}
+
+### 12) GitHub이 아닌 주소 → 200 + 빈 값 (400 아님)
+POST http://localhost:8080/api/posts/analyze
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "github_url": "https://gitlab.com/some/repo"
+}
+
+> {%
+    client.test("200 + 빈 결과", () => client.assert(
+        response.status === 200
+        && response.body.data.tech_stacks.length === 0
+        && response.body.data.summary == null));
+%}
+
+### 13) github_url 누락 → 400
+POST http://localhost:8080/api/posts/analyze
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+}
+
+> {%
+    client.test("400", () => client.assert(response.status === 400,
+        "필수값 누락은 400이어야 합니다. 받은 상태: " + response.status));
+%}
+
+### 14) 토큰 없이 호출 → 401
+POST http://localhost:8080/api/posts/analyze
+Content-Type: application/json
+
+{
+  "github_url": "https://github.com/yoonseo-aa/finance-compare-app"
+}
+
+> {%
+    client.test("401", () => client.assert(response.status === 401));
+%}
+
+### 15) 분석 없이·summary 없이 게시물 작성 → 요약도 없어야 정상
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "post_type": "CARD_NEWS",
+  "content": "분석을 거치지 않은 게시물 — summary 키가 응답에 없어야 한다"
+}
+
+> {%
+    client.global.set("post_id_nosummary", response.body.data.post_id);
+    client.test("생성 성공", () => client.assert(response.status === 200));
+%}
+
+### 16) 위 게시물 상세 → summary 키가 없어야 정상
+GET http://localhost:8080/api/posts/{{post_id_nosummary}}
+Authorization: Bearer {{access_token}}
+
+> {%
+    client.test("summary 키 없음", () => client.assert(
+        response.body.data.summary == null,
+        "분석을 안 했는데 summary가 있습니다."));
+%}

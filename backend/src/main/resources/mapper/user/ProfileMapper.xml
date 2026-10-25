@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.helloworld.domain.user.mapper.ProfileMapper">
+
+    <!-- 닉네임 중복(본인 제외) -->
+    <select id="existsNicknameByOther" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1 FROM users
+            WHERE nickname = #{nickname}
+              AND user_id &lt;&gt; #{userId}
+        )
+    </select>
+
+    <!-- 전달된 필드만 동적 갱신. 모든 필드가 null이면 updated_at만 갱신됨 -->
+    <update id="updateProfile">
+        UPDATE users
+        <set>
+            <if test="nickname != null">nickname = #{nickname},</if>
+            <if test="profileImageUrl != null">profile_image_url = #{profileImageUrl},</if>
+            <if test="introduce != null">introduce = #{introduce},</if>
+            updated_at = NOW()
+        </set>
+        WHERE user_id = #{userId}
+    </update>
+
+    <!-- 태그 존재 개수 (요청 tag_ids가 실제 tags에 있는지 검증) -->
+    <select id="countExistingTagIds" resultType="int">
+        SELECT COUNT(*) FROM tags
+        WHERE tag_id IN
+        <foreach collection="tagIds" item="tagId" open="(" separator="," close=")">
+            #{tagId}
+        </foreach>
+    </select>
+
+    <!-- 기존 관심사 삭제 (재설정 시 교체) -->
+    <delete id="deleteUserInterests">
+        DELETE FROM user_interests WHERE user_id = #{userId}
+    </delete>
+
+    <!-- 관심사 일괄 저장 -->
+    <insert id="insertUserInterests">
+        INSERT INTO user_interests (user_id, tag_id, created_at)
+        VALUES
+        <foreach collection="tagIds" item="tagId" separator=",">
+            (#{userId}, #{tagId}, NOW())
+        </foreach>
+    </insert>
+
+    <!-- 사용자의 관심 태그 조회 (user_interests ⨝ tags). 없으면 빈 결과 -->
+    <select id="selectInterestTags" resultType="com.helloworld.domain.tag.entity.Tag">
+        SELECT t.tag_id, t.tag_type, t.tag_name
+        FROM user_interests ui
+        JOIN tags t ON t.tag_id = ui.tag_id
+        WHERE ui.user_id = #{userId}
+        ORDER BY t.tag_id
+    </select>
+
+</mapper>

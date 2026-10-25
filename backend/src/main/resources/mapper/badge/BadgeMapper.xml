@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.helloworld.domain.badge.mapper.BadgeMapper">
+
+    <!--
+      4축 지표를 서브쿼리 하나로 모은다. 축마다 쿼리를 나누면 프로필 조회 한 번에 4회 왕복한다.
+
+      receivedLikes 는 post_likes 를 조인해 세지 않고 posts.like_count 캐시 컬럼을 합산한다.
+      이 컬럼은 SQS Worker 가 좋아요/취소 때 ±1 로 갱신하는 값이라 이미 정확도를 신뢰하는 자리다.
+      COUNT 로 세면 좋아요가 쌓일수록 느려지는데, 배지는 프로필을 열 때마다 계산되므로 그 비용이 그대로 체감된다.
+
+      posts 는 is_public 만 세고 비공개 글은 제외한다. "받은 좋아요"가 공개 글에서만 발생하므로
+      게시 축도 같은 모수를 봐야 두 축이 서로 어긋나지 않는다.
+      comments 는 소프트 삭제(is_deleted)를 제외한다.
+
+      activeDays 는 GitHub 미연동이면 행 자체가 없어 NULL 이므로 0 으로 접는다.
+    -->
+    <select id="selectMetrics" resultType="com.helloworld.domain.badge.entity.BadgeMetrics">
+        SELECT
+            (SELECT COUNT(*)
+               FROM posts
+              WHERE user_id = #{userId}
+                AND is_public = TRUE)                       AS postCount,
+
+            (SELECT COALESCE(SUM(like_count), 0)
+               FROM posts
+              WHERE user_id = #{userId}
+                AND is_public = TRUE)                       AS receivedLikes,
+
+            (SELECT COUNT(*)
+               FROM comments
+              WHERE user_id = #{userId}
+                AND is_deleted = FALSE)                     AS commentCount,
+
+            (SELECT COALESCE(MAX(active_days), 0)
+               FROM github_stats
+              WHERE user_id = #{userId})                    AS activeDays
+    </select>
+
+</mapper>

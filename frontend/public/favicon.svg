@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!--
+    Hello World 브랜드 마크 — components/icons.tsx의 BrandMark(패키지 큐브)와 같은 path다.
+    앱 안에서는 stroke가 currentColor지만 파비콘은 색을 물려받을 곳이 없어서, 브랜드색 타일에
+    흰 큐브를 얹는다. 브라우저 탭 배경이 밝든 어둡든 같은 대비로 읽히고, 16px로 줄어들어도
+    형태가 뭉개지지 않게 선을 앱(1.4)보다 굵은 1.9로 뒀다.
+    (원본 24 viewBox를 4만큼 밀어 32 타일 안에 여백을 준다.)
+  -->
+  <rect width="32" height="32" rx="7" fill="#ea700f"/>
+  <g transform="translate(4 4)" fill="none" stroke="#fff" stroke-width="1.9"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/>
+    <path d="m3.3 7 8.7 5 8.7-5"/>
+    <path d="M12 22V12"/>
+    <circle cx="12" cy="12" r="1.7" fill="#fff" stroke="none"/>
+  </g>
+</svg>

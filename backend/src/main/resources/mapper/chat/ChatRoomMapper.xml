@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.helloworld.domain.chat.mapper.ChatRoomMapper">
+
+    <!-- pair_key(UNIQUE)로 기존 DIRECT 방 조회. 없으면 null 반환 -->
+    <select id="selectRoomIdByPairKey" resultType="java.lang.Long">
+        SELECT room_id
+        FROM dm_rooms
+        WHERE pair_key = #{pairKey}
+    </select>
+
+    <!--
+      동시 생성 충돌 후 재조회 전용. FOR SHARE(잠금 읽기)를 쓴다.
+      REPEATABLE READ에서 일반 SELECT는 트랜잭션 시작 시점 스냅샷을 읽기 때문에
+      상대가 방금 커밋한 방이 보이지 않는다. 잠금 읽기는 최신 커밋 데이터를 읽는다.
+      상대 트랜잭션이 아직 커밋 전이면 그것이 끝날 때까지 대기한 뒤 결과를 본다.
+    -->
+    <select id="selectRoomIdByPairKeyForShare" resultType="java.lang.Long">
+        SELECT room_id
+        FROM dm_rooms
+        WHERE pair_key = #{pairKey}
+        FOR SHARE
+    </select>
+
+    <!-- 방 생성. AUTO_INCREMENT로 만들어진 room_id를 DmRoom.roomId에 되채운다 -->
+    <insert id="insertRoom" useGeneratedKeys="true" keyProperty="roomId">
+        INSERT INTO dm_rooms (
+            room_type, title, created_by, pair_key, created_at
+        ) VALUES (
+            #{roomType}, #{title}, #{createdBy}, #{pairKey}, NOW()
+        )
+    </insert>
+
+    <!--
+      참여자 일괄 등록. 개설자(ownerId)는 OWNER, 나머지는 MEMBER 역할.
+      메시지 요청(is_accepted)·알림 끄기(is_muted) 컬럼은 기능을 만들지 않기로 확정되어
+      migration/007에서 제거했다 — "모르는 사람도 대화할 수 있다", "mute 미구현"이 팀 결론이다.
+    -->
+    <insert id="insertMembers">
+        INSERT INTO dm_members (
+            room_id, user_id, member_role, joined_at
+        ) VALUES
+        <foreach collection="userIds" item="userId" separator=",">
+            (#{roomId}, #{userId},
+             <choose>
+                 <when test="userId == ownerId">'OWNER'</when>
+                 <otherwise>'MEMBER'</otherwise>
+             </choose>,
+             NOW())
+        </foreach>
+    </insert>
+
+    <!--
+      읽음 위치 갱신. 현재 값보다 큰 경우에만 올린다.
+      읽음 이벤트는 재연결·지연으로 순서가 뒤바뀌어 도착할 수 있고,
+      조건 없이 덮어쓰면 오래된 이벤트가 나중에 도착해 안읽음 수가 되살아난다.
+    -->
+    <update id="updateLastReadMessageId">
+        UPDATE dm_members
+        SET last_read_message_id = #{messageId}
+        WHERE room_id = #{roomId}
+          AND user_id = #{userId}
+          AND left_at IS NULL
+          AND (last_read_message_id IS NULL OR last_read_message_id &lt; #{messageId})
+    </update>
+
+    <!--
+      대화 목록. 마지막 메시지와 안읽음 수를 한 번의 쿼리로 함께 가져온다(N+1 방지).
+
+      정렬 키는 (마지막 메시지 id DESC, room_id DESC)다.
+      메시지가 없는 방은 COALESCE로 0이 되어 목록 끝에 모인다.
+      커서도 같은 두 값을 쓴다 — 마지막 메시지 id만으로는 값이 같은 방들(특히 0)에서
+      경계가 모호해져 누락·중복이 생긴다.
+
+      안읽음 조건에 COALESCE를 쓰는 이유(성능):
+      "(last_read IS NULL OR message_id > last_read)" 로 쓰면 OR 때문에 범위 최적화가 막혀
+      MySQL이 그 방의 인덱스 항목을 전부 읽고 나서 걸러낸다.
+      COALESCE로 바꾸면 range scan(room_id = ? AND ? < message_id)이 되어
+      이미 읽은 메시지는 아예 읽지 않는다 — 비용이 "안읽은 건수"에만 비례한다.
+      message_id는 AUTO_INCREMENT라 0보다 크므로 NULL을 0으로 치환해도 의미가 같다.
+    -->
+    <select id="selectRoomSummaries" resultType="com.helloworld.domain.chat.entity.ChatRoomSummary">
+        SELECT r.room_id                AS roomId,
+               r.room_type              AS roomType,
+               r.title                  AS title,
+               me.last_read_message_id  AS lastReadMessageId,
+               lm.message_id            AS lastMessageId,
+               lm.sender_id             AS lastSenderId,
+               lm.content               AS lastContent,
+               lm.deleted_at            AS lastDeletedAt,
+               lm.created_at            AS lastSentAt,
+               (SELECT COUNT(*)
+                  FROM dm_messages u
+                 WHERE u.room_id = r.room_id
+                   AND u.sender_id &lt;&gt; #{userId}
+                   AND u.message_id &gt; COALESCE(me.last_read_message_id, 0)
+               )                        AS unreadCount
+        FROM dm_members me
+        JOIN dm_rooms r ON r.room_id = me.room_id
+        LEFT JOIN dm_messages lm
+               ON lm.message_id = (SELECT MAX(m.message_id)
+                                     FROM dm_messages m
+                                    WHERE m.room_id = r.room_id)
+        WHERE me.user_id = #{userId}
+          AND me.left_at IS NULL
+        <!--
+          이름 검색. "손정민"을 검색하면 그 사람과의 1:1 방뿐 아니라
+          그 사람이 함께 있는 단체방도 나와야 한다(팀 확정).
+          그래서 방 타입을 구분하지 않고 "나 말고 참여자 중에 이름이 맞는 사람이 있는 방"을 찾는다.
+
+          ESCAPE를 지정하는 이유: 사용자가 % 나 _ 를 입력하면 LIKE 와일드카드로 동작해
+          "%" 한 글자로 전체가 검색된다. 서비스 계층에서 이 문자들을 이스케이프한다.
+        -->
+        <if test="keyword != null">
+            AND EXISTS (
+                SELECT 1
+                FROM dm_members cm
+                JOIN users cu ON cu.user_id = cm.user_id
+                WHERE cm.room_id = r.room_id
+                  AND cm.user_id &lt;&gt; #{userId}
+                  AND cm.left_at IS NULL
+                  AND cu.nickname LIKE CONCAT('%', #{keyword}, '%') ESCAPE '!'
+            )
+        </if>
+        <if test="beforeLastMessageId != null and beforeRoomId != null">
+            AND (COALESCE(lm.message_id, 0) &lt; #{beforeLastMessageId}
+                 OR (COALESCE(lm.message_id, 0) = #{beforeLastMessageId}
+                     AND r.room_id &lt; #{beforeRoomId}))
+        </if>
+        ORDER BY COALESCE(lm.message_id, 0) DESC, r.room_id DESC
+        LIMIT #{size}
+    </select>
+
+    <!--
+      상대방 정보를 방 목록 전체에 대해 한 번에 조회한다(N+1 방지).
+      last_read_message_id는 목록에서 "내 마지막 메시지를 상대가 읽었나"를 표시하는 데 쓴다
+      (프론트 요청). dm_members에 이미 있는 값이라 조인이 늘지 않는다.
+    -->
+    <select id="selectCounterparts" resultType="com.helloworld.domain.chat.entity.ChatRoomCounterpart">
+        SELECT m.room_id          AS roomId,
+               u.user_id          AS userId,
+               u.nickname         AS nickname,
+               u.profile_image_url AS profileImageUrl,
+               m.last_read_message_id AS lastReadMessageId
+        FROM dm_members m
+        JOIN users u ON u.user_id = m.user_id
+        WHERE m.user_id &lt;&gt; #{userId}
+          AND m.left_at IS NULL
+          AND m.room_id IN
+          <foreach collection="roomIds" item="roomId" open="(" separator="," close=")">
+              #{roomId}
+          </foreach>
+        ORDER BY m.room_id, u.user_id
+    </select>
+
+    <!-- 전체 안읽음 합계. 방별 계산을 그대로 합친다 -->
+    <select id="selectTotalUnreadCount" resultType="int">
+        SELECT COALESCE(SUM(
+                   (SELECT COUNT(*)
+                      FROM dm_messages u
+                     WHERE u.room_id = me.room_id
+                       AND u.sender_id &lt;&gt; #{userId}
+                       AND (me.last_read_message_id IS NULL
+                            OR u.message_id &gt; me.last_read_message_id))
+               ), 0)
+        FROM dm_members me
+        WHERE me.user_id = #{userId}
+          AND me.left_at IS NULL
+    </select>
+
+    <!--
+      한 방의 참여자 전원 + 각자의 안읽음 수. 메시지 저장 직후 개인 큐 갱신에 쓴다.
+      보낸 사람도 포함한다 — 여러 기기를 쓰면 다른 기기의 목록도 맨 위로 올라와야 하고,
+      sender_id <> user_id 조건 때문에 자기가 보낸 메시지는 자기 안읽음에 잡히지 않는다.
+
+      COALESCE를 쓰는 이유는 selectRoomSummaries와 같다(범위 최적화).
+      방 하나에 대한 조회이고 idx_dm_messages_room_msg가 커버하므로 전송 경로에 부담이 적다.
+    -->
+    <select id="selectMemberUnreadCounts" resultType="com.helloworld.domain.chat.entity.ChatRoomMemberUnread">
+        SELECT me.user_id AS userId,
+               (SELECT COUNT(*)
+                  FROM dm_messages u
+                 WHERE u.room_id = me.room_id
+                   AND u.sender_id &lt;&gt; me.user_id
+                   AND u.message_id &gt; COALESCE(me.last_read_message_id, 0)
+               )        AS unreadCount
+        FROM dm_members me
+        WHERE me.room_id = #{roomId}
+          AND me.left_at IS NULL
+    </select>
+
+    <!--
+      방의 현재 참여자인지 확인. left_at이 채워진 행은 방을 나간 사람이므로 제외한다.
+      구독·발행 권한 검사에 쓴다(참여자가 아닌 사람이 방 topic에 끼어드는 것을 막는다).
+    -->
+    <select id="existsMember" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1
+            FROM dm_members
+            WHERE room_id = #{roomId}
+              AND user_id = #{userId}
+              AND left_at IS NULL
+        )
+    </select>
+
+    <!--
+      대상 사용자가 실제로 존재하는지 확인 (없는 user_id로 FK 오류 500이 나는 것을 방지).
+      빈 목록이 들어오면 IN () 이 되어 SQL 문법 오류가 나므로 WHERE 1 = 0 으로 빠져 0을 반환한다.
+      (서비스에서 빈 목록을 먼저 걸러내지만, 매퍼 단독 호출에도 안전하도록 둔다)
+    -->
+    <select id="countExistingUserIds" resultType="int">
+        SELECT COUNT(*)
+        FROM users
+        <choose>
+            <when test="userIds != null and !userIds.isEmpty()">
+                WHERE user_id IN
+                <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+                    #{userId}
+                </foreach>
+            </when>
+            <otherwise>
+                WHERE 1 = 0
+            </otherwise>
+        </choose>
+    </select>
+
+</mapper>

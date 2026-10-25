@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!-- namespace는 Mapper 인터페이스의 FQCN과 정확히 일치해야 한다 -->
+<mapper namespace="com.helloworld.domain.user.mapper.UserMapper">
+
+    <!-- SELECT * 대신 필요한 컬럼 명시. DB snake_case ↔ Java camelCase 자동 매핑 -->
+    <select id="selectById" resultType="com.helloworld.domain.user.entity.User">
+        SELECT user_id, auth_provider, social_id, login_id, email,
+               nickname, profile_image_url, introduce, github_username,
+               role, created_at, updated_at
+        FROM users
+        WHERE user_id = #{userId}
+    </select>
+
+    <select id="selectByEmail" resultType="com.helloworld.domain.user.entity.User">
+        SELECT user_id, auth_provider, social_id, login_id, password, email,
+               nickname, profile_image_url, github_username,
+               role, created_at, updated_at
+        FROM users
+        WHERE email = #{email}
+    </select>
+
+    <!-- 소셜 계정 조회 (password 불필요) -->
+    <select id="selectBySocial" resultType="com.helloworld.domain.user.entity.User">
+        SELECT user_id, auth_provider, social_id, login_id, email,
+               nickname, profile_image_url, github_username,
+               role, created_at, updated_at
+        FROM users
+        WHERE auth_provider = #{authProvider}
+          AND social_id = #{socialId}
+    </select>
+
+    <select id="existsById" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1 FROM users WHERE user_id = #{userId}
+        )
+    </select>
+
+    <select id="existsByEmail" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1 FROM users WHERE email = #{email}
+        )
+    </select>
+
+    <!-- 비밀번호 재설정: 해시된 새 비밀번호로 갱신 -->
+    <update id="updatePassword">
+        UPDATE users
+        SET password = #{password}, updated_at = NOW()
+        WHERE user_id = #{userId}
+    </update>
+
+    <!-- useGeneratedKeys로 생성된 PK를 user.userId에 채워준다 -->
+    <insert id="insertUser" useGeneratedKeys="true" keyProperty="userId">
+        INSERT INTO users (
+            auth_provider, social_id, login_id, password, email,
+            nickname, profile_image_url, github_username,
+            role, created_at, updated_at
+        ) VALUES (
+            #{authProvider}, #{socialId}, #{loginId}, #{password}, #{email},
+            #{nickname}, #{profileImageUrl}, #{githubUsername},
+            'USER', NOW(), NOW()
+        )
+    </insert>
+
+</mapper>

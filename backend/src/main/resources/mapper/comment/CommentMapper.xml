@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  댓글 SQL.
+  #{...} 바인딩만 사용한다(${...} 금지 — SQL Injection).
+-->
+<mapper namespace="com.helloworld.domain.comment.mapper.CommentMapper">
+
+    <!--
+      [학습 포인트] <resultMap> + <association>
+       - 조회 결과 한 행을 중첩 객체(CommentResponse.author)로 나눠 담는 매핑 규칙이다.
+       - SELECT에서 작성자 컬럼에 author_ 접두어를 붙인 이유: comments와 users 양쪽에 user_id 같은
+         이름이 겹칠 수 있어, 별칭으로 구분해야 매핑이 헷갈리지 않는다.
+       - isMine은 DB 컬럼이 아니라 Service가 채우므로 여기에 두지 않는다.
+    -->
+    <resultMap id="commentResponseMap" type="com.helloworld.domain.comment.dto.response.CommentResponse">
+        <id     property="commentId" column="comment_id"/>
+        <result property="content"   column="content"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <association property="author"
+                     javaType="com.helloworld.domain.comment.dto.response.CommentAuthorResponse">
+            <id     property="userId"          column="author_user_id"/>
+            <result property="nickname"        column="author_nickname"/>
+            <result property="profileImageUrl" column="author_profile_image_url"/>
+        </association>
+    </resultMap>
+
+    <select id="existsPost" resultType="boolean">
+        SELECT EXISTS(
+            SELECT 1 FROM posts WHERE post_id = #{postId}
+        )
+    </select>
+
+    <!--
+      게시물 작성자 id (댓글 알림을 받을 사람). 행이 없으면 결과가 없어 null이 돌아온다
+      → 존재 확인을 겸한다. PK 조회라 existsPost와 비용이 같다.
+    -->
+    <select id="selectPostAuthorId" resultType="java.lang.Long">
+        SELECT user_id FROM posts WHERE post_id = #{postId}
+    </select>
+
+    <!--
+      댓글 등록.
+      useGeneratedKeys로 AUTO_INCREMENT 값(comment_id)을 파라미터 객체에 되채운다.
+      parent_comment_id / is_deleted / 시간 컬럼은 넣지 않음 → 테이블 DEFAULT 사용.
+    -->
+    <insert id="insertComment" useGeneratedKeys="true" keyProperty="commentId">
+        INSERT INTO comments (post_id, user_id, content, created_at, updated_at)
+        VALUES (#{postId}, #{userId}, #{content}, NOW(), NOW())
+    </insert>
+
+    <!-- 권한 검증용 원본 조회. 삭제된 댓글도 가져온다(404로 응답할지는 Service가 결정) -->
+    <select id="selectCommentById" resultType="com.helloworld.domain.comment.entity.Comment">
+        SELECT comment_id, post_id, user_id, parent_comment_id,
+               content, is_deleted, created_at, updated_at
+        FROM comments
+        WHERE comment_id = #{commentId}
+    </select>
+
+    <!--
+      본문 수정.
+      WHERE에 is_deleted = FALSE를 함께 둔다 — Service가 이미 검사하지만, 동시에 삭제 요청이
+      들어온 경우 여기서 0건 갱신으로 막아준다(방어적 조건).
+    -->
+    <update id="updateCommentContent">
+        UPDATE comments
+        SET content = #{content}
+        WHERE comment_id = #{commentId}
+          AND is_deleted = FALSE
+    </update>
+
+    <update id="softDeleteComment">
+        UPDATE comments
+        SET is_deleted = TRUE
+        WHERE comment_id = #{commentId}
+          AND is_deleted = FALSE
+    </update>
+
+    <!--
+      목록 조회.
+      - parent_comment_id IS NULL : 이번 범위는 1단계 댓글만. 나중에 대댓글이 생겨도
+        최상위 목록이 오염되지 않도록 미리 조건을 둔다.
+      - ORDER BY created_at, comment_id : 같은 초에 달린 댓글의 순서를 PK로 확정(정렬 안정성).
+    -->
+    <select id="selectCommentsByPostId" resultMap="commentResponseMap">
+        SELECT c.comment_id,
+               c.content,
+               c.created_at,
+               c.updated_at,
+               u.user_id           AS author_user_id,
+               u.nickname          AS author_nickname,
+               u.profile_image_url AS author_profile_image_url
+        FROM comments c
+        JOIN users u ON u.user_id = c.user_id
+        WHERE c.post_id = #{postId}
+          AND c.is_deleted = FALSE
+          AND c.parent_comment_id IS NULL
+        ORDER BY c.created_at ASC, c.comment_id ASC
+        LIMIT #{size} OFFSET #{offset}
+    </select>
+
+    <select id="countCommentsByPostId" resultType="long">
+        SELECT COUNT(*)
+        FROM comments
+        WHERE post_id = #{postId}
+          AND is_deleted = FALSE
+          AND parent_comment_id IS NULL
+    </select>
+
+    <!--
+      posts.comment_count 증감.
+      [학습 포인트] GREATEST(..., 0)
+       - 어떤 이유로든 카운트가 어긋났을 때 음수로 내려가는 것을 막는다.
+       - 원자적 증감(컬럼 = 컬럼 + n)이라 SELECT 후 UPDATE 하는 방식보다 동시성에 안전하다.
+       - 다만 "음수 방지"일 뿐 초과/부족 자체를 막지는 못한다. 호출하는 쪽에서
+         실제로 행이 바뀐 경우에만 부르는 것이 정합성의 조건이다(CommentService.deleteComment).
+
+      ⚠️ 이 UPDATE는 댓글 INSERT보다 먼저 실행돼야 한다(동시 댓글 데드락 — CommentService 주석).
+    -->
+    <update id="addPostCommentCount">
+        UPDATE posts
+        SET comment_count = GREATEST(comment_count + #{delta}, 0)
+        WHERE post_id = #{postId}
+    </update>
+
+    <!--
+      comments.like_count 를 갱신하던 addCommentLikeCount 는 제거했다.
+      그 컬럼을 읽는 쿼리가 하나도 없고(좋아요 수는 Redis 정본에서 온다),
+      comment_likes INSERT가 잡는 FK 공유 락과 물려 데드락이 나기 때문이다.
+      posts.like_count 와 같은 이유로 이미 내린 결론이다(PostLikeMapper.xml 주석 참고).
+      RDB에서 좋아요 수가 필요해지면 행을 센다: SELECT COUNT(*) FROM comment_likes ...
+    -->
+
+</mapper>

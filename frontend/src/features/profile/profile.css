@@ -1,0 +1,133 @@
+/* 프로필 화면 전용 스타일 — 초원 팔레트 변수 + 프로필 키프레임.
+   ProfilePage.tsx에서 import './profile.css' (Vite 사이드이펙트 import).
+   ⚠️ 팔레트 변수는 field-defs.ts의 SVG 그라디언트가 var()로 참조 → 전역(:root)에 있어야 아틀라스가 색을 얻습니다. */
+
+:root {
+  --f1a:#fff2cc; --f1m:#ffdf92; --f1b:#f8c74e;
+  --f2a:#ffe49b; --f2m:#fdc85c; --f2b:#f2a516;
+  --f3a:#ffd07a; --f3m:#f9ad35; --f3b:#e2820a;
+  --f4a:#fdb262; --f4m:#f38a20; --f4b:#d15f05;
+  --f5a:#f79a4c; --f5m:#e96f18; --f5b:#b34803;
+  --f6a:#ffeab0; --f6m:#f7cd6e; --f6b:#e0a02a;
+  --gr1a:#eeefdd; --gr1m:#d2d8b6; --gr1b:#abb58c;
+  --gr2a:#e1e5c8; --gr2m:#bcc49c; --gr2b:#929b72;
+  --f0a:#fffaf0; --f0m:#f7e9c6; --f0b:#e9d5a0;
+  --gr0a:#f4f4ea; --gr0m:#e3e5d0; --gr0b:#cad0b2;
+  --stmLo:#92612e; --stmMid:#c98d43; --stmHi:#e7bf7a; --vein:rgba(255,255,255,.55);
+  --lf0a:#e67e22; --lf0b:#f2932e; --lf1a:#ffb236; --lf1b:#ffc258; --lf2a:#ffd268; --lf2b:#ffe29a; --lf3a:#fff2c6; --lf3b:#fff8de;
+  --or0a:#c45a2a; --or0b:#d76230; --or1a:#e86a3b; --or1b:#f08d5f; --or2a:#f4b183; --or2b:#f8c7a3; --or3a:#ffdcc5; --or3b:#ffebdd;
+  --wh2a:#dc8a0c; --wh2m:#f2a516; --wh2b:#fbc966;
+  --pd1a:#f0a412; --pd1m:#fbb527; --pd1b:#fdc44e; --pd1a2:#e89a0e; --pd1b2:#f9ae1e;
+  --pd2a:#f2e6c2; --pd2m:#fcf5e2; --pd2b:#fffdf6; --pd2a2:#ecdcb0; --pd2b2:#faf1d8;
+  --pc1a:#dc5c08; --pc1m:#f0720c; --pc1b:#f8871e; --pc2a:#ef7c1c; --pc2m:#fc8f36; --pc2b:#fda255;
+  --pu1a:#f09610; --pu1b:#fcaa26; --pu2a:#e88c0c; --pu2b:#f9a01c;
+  --pf1a:#ee8c3c; --pf1b:#faa864; --pf2a:#e6842f; --pf2b:#f59f56;
+  --pw1a:#dc8a0c; --pw1m:#f2a516; --pw1b:#fbc44e; --pw0a:#e8bc6c; --pw0m:#f8cf7e; --pw0b:#fde3ac;
+  --pb1a:#deab7d; --pb1m:#bc7b4a; --pb1b:#8e5836; --pb2a:#f6ddd0; --pb2m:#deab7d; --pb2b:#bc7b4a;
+  --gn0a:#457a28; --gn0b:#59932f; --gn1a:#6eaf3d; --gn1b:#83bd4c; --gn2a:#97c95a; --gn2b:#add26f; --gn3a:#c3db8a; --gn3b:#d6e6a8;
+  --gstmLo:#62784d; --gstmMid:#94a873; --gstmHi:#c7d3af;
+  --gbr0:#c3db8a; --gbr1:#97c95a; --gbr2:#457a28;
+  --fldWash: radial-gradient(112% 96% at 50% 118%, #efe4cb 0%, #f5efe2 46%, rgba(246,246,248,0) 82%);
+  --fldBase: linear-gradient(180deg, rgba(182,162,120,0) 0%, rgba(176,152,106,.2) 54%, rgba(148,125,84,.33) 100%);
+  /* 엔진이 지면선 색을 --color-divider로 읽는다(meadow/engine.ts, 수정 금지 파일).
+     이 프로젝트의 토큰명은 --color-line이라 별칭을 걸어 준다. 없으면 엔진 하드코딩
+     폴백(#d9dade)이 쓰이는데, 라이트에선 값이 우연히 같아 괜찮지만 다크에선 튄다. */
+  --color-divider: var(--color-line);
+}
+[data-theme="dark"] {
+  --f1a:#e0b95c; --f1m:#a8862f; --f1b:#6b5117;
+  --f2a:#f0b94f; --f2m:#b47f22; --f2b:#6f4a12;
+  --f3a:#f6a733; --f3m:#c0721a; --f3b:#75400c;
+  --f4a:#f4881f; --f4m:#bd5a12; --f4b:#6d3006;
+  --f5a:#e9701c; --f5m:#ab4510; --f5b:#5f2204;
+  --f6a:#c9b05e; --f6m:#8e7a32; --f6b:#514618;
+  --gr1a:#96a35c; --gr1m:#657135; --gr1b:#3c441d;
+  --gr2a:#7d8b4c; --gr2m:#525d29; --gr2b:#2e3515;
+  --f0a:#cdbd8e; --f0m:#8f8459; --f0b:#514a30;
+  --gr0a:#8b9660; --gr0m:#5c663a; --gr0b:#373d22;
+  --stmLo:#6a5f38; --stmMid:#8f7f4a; --stmHi:#b79c5f; --vein:rgba(255,246,214,.34);
+  --lf0a:#453d21; --lf0b:#5c5129; --lf1a:#93834b; --lf1b:#b8a26a; --lf2a:#a68d4e; --lf2b:#c3a86d; --lf3a:#bda366; --lf3b:#d8c08e;
+  --or0a:#752904; --or0b:#9c400a; --or1a:#dd6a10; --or1b:#f2982a; --or2a:#f0a63c; --or2b:#f9c97a; --or3a:#f7bd68; --or3b:#fddfae;
+  --wh2a:#c07d1e; --wh2m:#d99f3a; --wh2b:#eec474;
+  --pd1a:#c9860c; --pd1m:#dd9a1c; --pd1b:#eeb03c; --pd1a2:#bd7c0a; --pd1b2:#d29216;
+  --pd2a:#c3b378; --pd2m:#d6c68d; --pd2b:#e6d9ab; --pd2a2:#b8a86e; --pd2b2:#cfbe85;
+  --pc1a:#b04806; --pc1m:#c85c0a; --pc1b:#d97018; --pc2a:#c46514; --pc2m:#d4762c; --pc2b:#e28a48;
+  --pu1a:#c67a0c; --pu1b:#d98d1e; --pu2a:#b8710a; --pu2b:#cd8316;
+  --pf1a:#c47230; --pf1b:#d78c52; --pf2a:#b96b28; --pf2b:#cd8248;
+  --pw1a:#b4700a; --pw1m:#c98812; --pw1b:#dda23e; --pw0a:#bd9a56; --pw0m:#cfae68; --pw0b:#e0c48c;
+  --pb1a:#cf711c; --pb1m:#c25a0a; --pb1b:#9c4408; --pb2a:#d09b3c; --pb2m:#cd8616; --pb2b:#ab660a;
+  --gn0a:#2a3d1a; --gn0b:#3b5424; --gn1a:#547430; --gn1b:#729640; --gn2a:#7b9b4e; --gn2b:#9db765; --gn3a:#a9c46a; --gn3b:#c6d99a;
+  --gstmLo:#425827; --gstmMid:#597635; --gstmHi:#769448;
+  --gbr0:#a6bd64; --gbr1:#7c9838; --gbr2:#516a22;
+  /* 다크에는 지면 워시가 없다(시안 스펙 components.md: "배경 워시 — 다크 none").
+     다만 변수를 none으로 덮어 버리면 테마가 바뀌는 순간 그라디언트 자체가 사라져
+     페이드할 대상이 없어진다 → 변수는 라이트 값 그대로 두고 아래 .hw-fld 래퍼의
+     opacity를 0으로 내려 같은 결과를 620ms에 걸쳐 만든다. */
+}
+
+/* ── 초원 지면 워시 2겹 ─────────────────────────────────────────────────────
+   레이어를 3개로 나눈 이유: 같은 요소에서 animation과 transition이 opacity를 동시에
+   건드리면 animation이 이긴다(fill-mode: both가 끝난 뒤에도 값을 붙잡는다). 그래서
+     .hw-fld       → 테마 페이드 담당 (opacity transition)
+     자식 2개      → 성장 리빌 담당 (opacity + clip-path animation)
+   로 분리했다. 620ms는 캔버스 엔진의 테마 크로스페이드 값과 같다(meadow/engine.ts) —
+   캔버스 식물색과 지면 워시가 같은 속도로 함께 넘어가야 전환이 어긋나지 않는다. */
+.hw-fld {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 620ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+[data-theme="dark"] .hw-fld { opacity: 0; }
+
+.hw-fld-wash, .hw-fld-base {
+  position: absolute;
+  pointer-events: none;
+}
+.hw-fld-wash {
+  inset: 0;
+  background: var(--fldWash);
+  animation: hw-wash-in 2.4s cubic-bezier(.32,.06,.24,1) .2s both;
+  /* 좌우 끝을 부드럽게 지워 캔버스 폭 밖으로 워시가 새어 보이지 않게 한다 */
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%);
+}
+.hw-fld-base {
+  left: 0; right: 0; bottom: 0;
+  height: 32%;
+  background: var(--fldBase);
+  animation: hw-wash-in 2.2s cubic-bezier(.32,.06,.24,1) .55s both;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 9%, #000 91%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 9%, #000 91%, transparent 100%);
+}
+@media (prefers-reduced-motion: reduce) {
+  /* 엔진 쪽 성장·바람과 같은 정책 — 리빌 없이 최종 상태로 바로 둔다 */
+  .hw-fld { transition: none; }
+  .hw-fld-wash, .hw-fld-base { animation: none; }
+}
+
+/* ── 프로필 키프레임 (시안 helmet 이관 — 이름 충돌나는 hw-cell은 hw-cellgrow로 개명) ── */
+/* clip-path: inset(상 우 하 좌). 상단을 100% 잘라 두고 0으로 풀면 잘림선이 아래→위로
+   올라간다 = 지면이 밑에서 차오르고, 식물이 자라는 방향과도 일치한다.
+   시안 원본은 inset(0 0 100% 0)으로 위→아래였는데, 워시 그라디언트는 아래쪽이 불투명해서
+   하강하는 잘림선이 불투명 구간을 가로지르며 가로줄로 보였다. 방향을 뒤집으면 잘림선이
+   불투명 구간을 지나는 시점이 opacity가 아직 낮은 초반이라 눈에 걸리지 않는다. */
+@keyframes hw-wash-in { from { opacity: 0; clip-path: inset(100% 0 0 0); } 45% { opacity: .5; } to { opacity: 1; clip-path: inset(0 0 0 0); } }
+@keyframes hw-cellgrow { from { transform: scaleY(0.04); opacity: 0; } to { transform: scaleY(1); opacity: 1; } }
+@keyframes hw-tip-in { from { opacity: 0; transform: translateX(-50%) translateY(5px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+@keyframes hw-tip-side { from { opacity: 0; transform: translateY(-50%) translateX(-4px); } to { opacity: 1; transform: translateY(-50%) translateX(0); } }
+@keyframes hw-tip-rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes hw-tip-gold { 0% { opacity: 0; transform: translateX(-50%) translateY(18px); } 58% { opacity: 1; transform: translateX(-50%) translateY(-4px); } 100% { opacity: 1; transform: translateX(-50%) translateY(0); } }
+@keyframes hw-tip-pop { 0% { transform: scale(1); } 9% { transform: scale(1.045); } 22% { transform: scale(.997); } 32%, 100% { transform: scale(1); } }
+@keyframes hw-conf { 0% { opacity: 0; transform: translate(0, 0) rotate(0deg) scale(.35); } 10% { opacity: 1; } 65% { opacity: 1; } 100% { opacity: 0; transform: translate(var(--tx), var(--ty)) rotate(var(--rot)) scale(.95); } }
+@keyframes hw-tagin { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+@keyframes hw-bpop { 0% { opacity: 0; transform: scale(.62) translateY(7px); } 62% { opacity: 1; transform: scale(1.06) translateY(-1px); } 100% { opacity: 1; transform: none; } }
+@keyframes hw-cpopA { 0% { transform: scale(.66); opacity: .3; font-weight: var(--cw0, 500); } 52% { transform: scale(var(--cpk, 1.2)); opacity: 1; font-weight: var(--cwp, 800); } 100% { transform: scale(1); opacity: 1; font-weight: var(--cw0, 500); } }
+@keyframes hw-cpopB { 0% { transform: scale(.66); opacity: .3; font-weight: var(--cw0, 500); } 52% { transform: scale(var(--cpk, 1.2)); opacity: 1; font-weight: var(--cwp, 800); } 100% { transform: scale(1); opacity: 1; font-weight: var(--cw0, 500); } }
+@keyframes hw-cshiver { 0%, 100% { transform: scale(1) rotate(0deg); } 25% { transform: scale(1.06) rotate(-3deg); } 75% { transform: scale(1.06) rotate(3deg); } }
+@keyframes hw-cfinal { 0% { transform: scale(1); } 34% { transform: scale(1.18); } 68% { transform: scale(.97); } 100% { transform: scale(1); } }
+@keyframes hw-ringA { from { opacity: var(--ro, .5); transform: scale(1); } to { opacity: 0; transform: scale(var(--rs, 1.5)); } }
+@keyframes hw-ringB { from { opacity: var(--ro, .5); transform: scale(1); } to { opacity: 0; transform: scale(var(--rs, 1.5)); } }
+@keyframes hw-secin { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes hw-lin { from { transform: scaleX(0); } to { transform: scaleX(1); } }

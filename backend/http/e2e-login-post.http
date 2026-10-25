@@ -1,0 +1,52 @@
+### =====================================================================
+### E2E 통합 테스트: 회원가입 → 로그인 → 게시물 생성 (실제 JWT 인증)
+### 위에서부터 순서대로 각 요청의 초록 ▶ 클릭.
+### 로그인 응답의 access_token을 자동 저장해서 게시물 요청에 재사용한다.
+### 전제: MySQL + Redis(로그인 refresh 토큰 저장) 실행 중, 앱 실행 중.
+### =====================================================================
+
+### 1) 회원가입 (공개) — 이메일/비번만 (비번 8자 이상)
+POST http://localhost:8080/api/users
+Content-Type: application/json
+
+{
+  "email": "tester@test.com",
+  "password": "test1234!"
+}
+
+### 2) 로그인 (공개) → access_token 자동 저장
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "tester@test.com",
+  "password": "test1234!"
+}
+
+> {%
+    client.test("로그인 성공", () => client.assert(response.status === 200));
+    client.global.set("access_token", response.body.data.access_token);
+    client.log("저장된 토큰: " + response.body.data.access_token);
+%}
+
+### 3) 게시물 생성 (인증 필요) — 위에서 받은 토큰 사용
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "post_type": "PROJECT",
+  "content": "E2E 테스트: 로그인 토큰으로 만든 게시물",
+  "github_url": "https://github.com/example/repo",
+  "deploy_url": "https://example.site",
+  "tech_stacks": ["Spring Boot", "Redis"]
+}
+
+### 4) (검증) 토큰 없이 게시물 생성 → 401 AUTH_001 이 나야 정상
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+
+{
+  "post_type": "PROJECT",
+  "content": "토큰 없음 → 거부되어야 함"
+}

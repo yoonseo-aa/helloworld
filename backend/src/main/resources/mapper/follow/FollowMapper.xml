@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.helloworld.domain.follow.mapper.FollowMapper">
+
+    <!-- 대상 사용자 존재 여부 -->
+    <select id="existsUser" resultType="boolean">
+        SELECT EXISTS(
+            SELECT 1 FROM users WHERE user_id = #{userId}
+        )
+    </select>
+
+    <!-- id 목록으로 프로필 조회 (Redis 목록의 id에 붙일 nickname/profile_image_url) -->
+    <select id="selectUsersByIds" resultType="com.helloworld.domain.follow.domain.FollowUserRow">
+        SELECT user_id, nickname, profile_image_url, introduce
+        FROM users
+        WHERE user_id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
+    <!-- 팔로우 관계 저장 (Worker 비동기). UNIQUE(follower_id, following_id)로 멱등 보장 -->
+    <insert id="insertFollow">
+        INSERT INTO follows (follower_id, following_id, created_at)
+        VALUES (#{followerId}, #{followingId}, #{createdAt})
+        ON DUPLICATE KEY UPDATE created_at = created_at
+    </insert>
+
+    <!-- 팔로우 관계 삭제 (hard delete) -->
+    <delete id="deleteFollow">
+        DELETE FROM follows
+        WHERE follower_id = #{followerId} AND following_id = #{followingId}
+    </delete>
+
+    <!-- 캐시 미스 복구: userId의 팔로잉(following_id)+시각 (ZSET user:following:{userId} 재적재용) -->
+    <select id="selectFollowingRows" resultType="com.helloworld.domain.follow.domain.FollowRelationRow">
+        SELECT following_id AS user_id, created_at
+        FROM follows
+        WHERE follower_id = #{followerId}
+    </select>
+
+    <!-- 캐시 미스 복구: userId의 팔로워(follower_id)+시각 (ZSET user:followers:{userId} 재적재용) -->
+    <select id="selectFollowerRows" resultType="com.helloworld.domain.follow.domain.FollowRelationRow">
+        SELECT follower_id AS user_id, created_at
+        FROM follows
+        WHERE following_id = #{followingId}
+    </select>
+
+</mapper>

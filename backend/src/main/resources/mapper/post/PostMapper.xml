@@ -1,0 +1,321 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  [학습 포인트] MyBatis Mapper XML
+   - namespace는 Mapper 인터페이스의 FQCN(패키지+클래스명)과 정확히 일치해야 한다.
+     이 매핑으로 "인터페이스 메서드 이름(id)" ↔ "아래 SQL"이 연결된다.
+   - #{...} : PreparedStatement 파라미터 바인딩. 값이 SQL 구조와 분리되어 SQL Injection 안전.
+              (반대로 ${...}는 문자열을 그대로 끼워넣어 위험 → 규약상 금지)
+   - 파라미터 이름은 Mapper 인터페이스의 @Param("...") 또는 객체의 필드명(getter)을 따른다.
+-->
+<mapper namespace="com.helloworld.domain.post.mapper.PostMapper">
+
+    <!--
+      게시물 등록.
+      [학습 포인트] useGeneratedKeys="true" keyProperty="postId"
+       - INSERT 실행 후 DB가 만든 AUTO_INCREMENT 값(post_id)을 파라미터 객체의 postId 필드에 되채운다.
+       - 덕분에 Service가 insert 직후 post.getPostId()로 방금 만든 PK를 알 수 있다.
+      view_count/like_count/comment_count/is_public/시간 컬럼은 넣지 않음 → 테이블의 DEFAULT 값 사용.
+    -->
+    <insert id="insertPost" useGeneratedKeys="true" keyProperty="postId">
+        INSERT INTO posts (
+            user_id, post_type, content, thumbnail_url,
+            github_url, project_link, ai_summary,
+            created_at, updated_at
+        ) VALUES (
+            #{userId}, #{postType}, #{content}, #{thumbnailUrl},
+            #{githubUrl}, #{projectLink}, #{aiSummary},
+            NOW(), NOW()
+        )
+    </insert>
+
+    <!--
+      미디어 일괄 등록.
+      [학습 포인트] <foreach> : 리스트를 반복해 동적 SQL을 만든다.
+       - collection="medias" 는 @Param("medias") List, item="m"은 각 요소.
+       - separator=","로 (…),(…),(…) 형태의 다중 VALUES가 되어, INSERT 1번으로 N행 삽입(성능↑).
+    -->
+    <insert id="insertPostMedias">
+        INSERT INTO post_medias (post_id, media_type, media_url, display_order, created_at)
+        VALUES
+        <foreach collection="medias" item="m" separator=",">
+            (#{m.postId}, #{m.mediaType}, #{m.mediaUrl}, #{m.displayOrder}, NOW())
+        </foreach>
+    </insert>
+
+    <!--
+      태그 find-or-create (1/2): 없으면 삽입.
+      [학습 포인트] INSERT IGNORE
+       - tags.tag_name에 UNIQUE 제약이 있어, 이미 있는 태그면 IGNORE가 중복 오류를 무시한다.
+       - 여러 요청이 같은 태그를 동시에 만들어도 안전(동시성). 이후 SELECT로 항상 id를 얻는다.
+    -->
+    <insert id="insertTagIfAbsent">
+        INSERT IGNORE INTO tags (tag_type, tag_name)
+        VALUES ('TECH', #{tagName})
+    </insert>
+
+    <select id="selectTagIdByName" resultType="long">
+        SELECT tag_id
+        FROM tags
+        WHERE tag_name = #{tagName}
+    </select>
+
+    <!-- 게시물-태그 연결 일괄 등록 -->
+    <insert id="insertPostTags">
+        INSERT INTO post_tags (post_id, tag_id)
+        VALUES
+        <foreach collection="tagIds" item="tagId" separator=",">
+            (#{postId}, #{tagId})
+        </foreach>
+    </insert>
+
+    <!--
+      메인 피드 항목 매핑.
+      author는 users 조인 결과라 <association>으로 중첩 매핑한다(별칭 author_* 사용).
+      like_count/is_liked/image_urls는 SQL이 채우지 않으므로 매핑에 없음(Service가 보완).
+    -->
+    <resultMap id="feedItemMap" type="com.helloworld.domain.post.dto.response.FeedItemResponse">
+        <id     property="postId"       column="post_id"/>
+        <result property="postType"     column="post_type"/>
+        <result property="content"      column="content"/>
+        <result property="thumbnailUrl" column="thumbnail_url"/>
+        <result property="commentCount" column="comment_count"/>
+        <result property="createdAt"    column="created_at"/>
+        <result property="pinned"       column="is_pinned"/>
+        <association property="author" javaType="com.helloworld.domain.post.dto.response.PostAuthorResponse">
+            <id     property="userId"          column="author_user_id"/>
+            <result property="nickname"        column="author_nickname"/>
+            <result property="profileImageUrl" column="author_profile_image_url"/>
+        </association>
+    </resultMap>
+
+    <!-- 팔로우 상단 고정 판단식: 작성자가 뷰어의 팔로우 대상 AND 최근 30분(기준시각 asOf).
+         followingIds가 비면 IN () 문법 오류가 나므로 FALSE로 폴백한다(=고정 없음, 순수 최신순).
+         NOW()가 아니라 #{asOf}를 쓰는 이유: 페이지마다 NOW()로 재계산하면 30분 경계를 넘긴 글이
+         고정→비고정으로 바뀌며 이미 본 글이 재등장(중복)한다. asOf를 커서에 고정해 세션 내 일관성 유지.
+         SELECT·WHERE(커서)·ORDER BY에서 공유한다. -->
+    <sql id="feedIsPinnedExpr">
+        <choose>
+            <when test="followingIds != null and followingIds.size() > 0">
+                (p.user_id IN
+                <foreach item="fid" collection="followingIds" open="(" separator="," close=")">#{fid}</foreach>
+                AND p.created_at &gt;= #{asOf} - INTERVAL 30 MINUTE)
+            </when>
+            <otherwise>FALSE</otherwise>
+        </choose>
+    </sql>
+
+    <!-- 피드 고정 기준시각용 DB 현재시각. 첫 페이지에서 한 번 읽어 커서에 싣는다. -->
+    <select id="selectDbNow" resultType="java.time.LocalDateTime">
+        SELECT NOW()
+    </select>
+
+    <!--
+      공통 SELECT 컬럼 (피드 조회 2종 공유).
+      thumbnail_url이 없으면(주로 CARD_NEWS) 첫 IMAGE 미디어를 대표컷으로 COALESCE 폴백한다
+      (display_order·media_id 순 첫 1건, 이미지도 없으면 null) — 유저 그리드(selectUserPosts)와 동일 규칙.
+    -->
+    <sql id="feedColumns">
+        p.post_id            AS post_id,
+        p.post_type          AS post_type,
+        p.content            AS content,
+        COALESCE(p.thumbnail_url, (
+            SELECT m.media_url
+            FROM post_medias m
+            WHERE m.post_id = p.post_id
+              AND m.media_type = 'IMAGE'
+            ORDER BY m.display_order, m.media_id
+            LIMIT 1
+        ))                   AS thumbnail_url,
+        p.comment_count      AS comment_count,
+        p.created_at         AS created_at,
+        u.user_id            AS author_user_id,
+        u.nickname           AS author_nickname,
+        u.profile_image_url  AS author_profile_image_url
+    </sql>
+
+    <!--
+      메인 피드: 전체 공개 게시물 최신순(post_id DESC) 커서 조회 (본인 글 제외).
+      팔로우 유저 글도 최신순으로 자연히 포함된다.
+      (예전 selectFeedByFollowing(팔로잉만) 방식은 글 적은 유저 팔로우 시 피드 붕괴로 폐기.)
+    -->
+    <!-- 팔로우 상단 고정 피드: is_pinned DESC, created_at DESC, post_id DESC 로 정렬하고
+         (is_pinned, created_at, post_id) 복합 커서로 페이징한다. 커서 조건은 전 컬럼 DESC라
+         행-값 비교 (expr, created_at, post_id) < (직전 값들) 로 "다음 위치"를 잡는다.
+         is_pinned 판정 입력(asOf 기준시각·followingIds)은 첫 페이지에서 커서에 스냅샷으로 고정돼
+         이후 페이지가 재사용한다 → 한 스크롤 세션 내에서는 고정 여부가 일관되어 중복/누락이 없다.
+         (고정 집합은 피드를 새로 열 때만 갱신된다.) -->
+    <select id="selectPublicFeed" resultMap="feedItemMap">
+        SELECT
+        <include refid="feedColumns"/>,
+        <include refid="feedIsPinnedExpr"/> AS is_pinned
+        FROM posts p
+        JOIN users u ON u.user_id = p.user_id
+        WHERE p.is_public = TRUE
+          AND p.user_id != #{viewerId}
+          <if test="postType != null">
+              AND p.post_type = #{postType}
+          </if>
+          <if test="cursorPostId != null">
+              AND (<include refid="feedIsPinnedExpr"/>, p.created_at, p.post_id)
+                  &lt; (#{cursorPinned}, #{cursorCreatedAt}, #{cursorPostId})
+          </if>
+        ORDER BY <include refid="feedIsPinnedExpr"/> DESC, p.created_at DESC, p.post_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 이미지 배치 조회 (map-underscore-to-camel-case로 post_id→postId, media_url→mediaUrl) -->
+    <select id="selectPostImages" resultType="com.helloworld.domain.post.entity.PostMedia">
+        SELECT post_id, media_url
+        FROM post_medias
+        WHERE media_type = 'IMAGE'
+          AND post_id IN
+          <foreach collection="postIds" item="id" open="(" separator="," close=")">
+              #{id}
+          </foreach>
+        ORDER BY post_id, display_order
+    </select>
+
+    <!--
+      게시물 상세 매핑. deploy_url=project_link 로 별칭 매핑한다.
+      ai_summary 는 JSON 문자열이라 원문 그대로 담고, Service가 파싱해 summary 필드로 옮긴다.
+      like_count/is_liked/image_urls/tech_stacks/author.is_following은 Service가 보완하므로 매핑에 없음.
+      is_public은 접근 제어용(응답 DTO에서 @JsonIgnore).
+    -->
+    <resultMap id="postDetailMap" type="com.helloworld.domain.post.dto.response.PostDetailResponse">
+        <id     property="postId"       column="post_id"/>
+        <result property="postType"     column="post_type"/>
+        <result property="content"      column="content"/>
+        <result property="thumbnailUrl" column="thumbnail_url"/>
+        <result property="githubUrl"    column="github_url"/>
+        <result property="deployUrl"    column="deploy_url"/>
+        <result property="aiSummary"    column="ai_summary"/>
+        <result property="commentCount" column="comment_count"/>
+        <result property="viewCount"    column="view_count"/>
+        <result property="isPublic"     column="is_public"/>
+        <result property="createdAt"    column="created_at"/>
+        <association property="author" javaType="com.helloworld.domain.post.dto.response.PostAuthorResponse">
+            <id     property="userId"          column="author_user_id"/>
+            <result property="nickname"        column="author_nickname"/>
+            <result property="profileImageUrl" column="author_profile_image_url"/>
+        </association>
+    </resultMap>
+
+    <!-- 게시물 상세 1건 (작성자 조인) -->
+    <select id="selectPostDetail" resultMap="postDetailMap">
+        SELECT
+            p.post_id            AS post_id,
+            p.post_type          AS post_type,
+            p.content            AS content,
+            p.thumbnail_url      AS thumbnail_url,
+            p.github_url         AS github_url,
+            p.project_link       AS deploy_url,
+            p.ai_summary         AS ai_summary,
+            p.comment_count      AS comment_count,
+            p.view_count         AS view_count,
+            p.is_public          AS is_public,
+            p.created_at         AS created_at,
+            u.user_id            AS author_user_id,
+            u.nickname           AS author_nickname,
+            u.profile_image_url  AS author_profile_image_url
+        FROM posts p
+        JOIN users u ON u.user_id = p.user_id
+        WHERE p.post_id = #{postId}
+    </select>
+
+    <!-- 게시물 기술 스택 태그명 (post_tags→tags) — 상세 조회 단건용 -->
+    <select id="selectPostTechStacks" resultType="string">
+        SELECT t.tag_name
+        FROM post_tags pt
+        JOIN tags t ON t.tag_id = pt.tag_id
+        WHERE pt.post_id = #{postId}
+        ORDER BY pt.post_tag_id
+    </select>
+
+    <!--
+      여러 게시물의 기술 스택 태그 배치 조회 (피드 목록용, N+1 방지).
+      (post_id, tag_name) 행을 post_id·post_tag_id 순으로 내려주고 Service가 post별로 그룹핑한다.
+      map-underscore-to-camel-case로 post_id→postId, tag_name→tagName 매핑.
+    -->
+    <select id="selectPostTechStacksByPostIds" resultType="com.helloworld.domain.post.mapper.PostTagRow">
+        SELECT pt.post_id AS post_id, t.tag_name AS tag_name
+        FROM post_tags pt
+        JOIN tags t ON t.tag_id = pt.tag_id
+        WHERE pt.post_id IN
+        <foreach collection="postIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        ORDER BY pt.post_id, pt.post_tag_id
+    </select>
+
+    <!-- 조회수 1 증가 (원자적) -->
+    <update id="increaseViewCount">
+        UPDATE posts SET view_count = view_count + 1 WHERE post_id = #{postId}
+    </update>
+
+    <!--
+      프로젝트 요약(JSON) 저장. 게시물 작성 직후 비동기로 만들어져 나중에 채워진다.
+
+      updated_at 을 갱신하지 않는 이유: 이 컬럼은 ON UPDATE CURRENT_TIMESTAMP 라
+      다른 컬럼만 바꿔도 자동으로 올라간다. 그래서 여기서 막을 방법이 없고,
+      "사용자가 글을 수정했다"는 의미가 흐려진다. 화면에서 수정 시각을 쓰게 되면
+      그때는 별도 컬럼(content_updated_at)으로 분리해야 한다.
+    -->
+    <update id="updateAiSummary">
+        UPDATE posts
+        SET ai_summary = #{aiSummary}
+        WHERE post_id = #{postId}
+    </update>
+
+    <!--
+      유저 프로필 그리드: 특정 유저 글의 썸네일만 최신순(post_id DESC) 커서 조회.
+      onlyPublic=true(타인)면 공개글만, false(본인)면 비공개 포함. resultType 직매핑(snake→camel).
+      thumbnail_url이 없으면(주로 CARD_NEWS) 첫 IMAGE 미디어를 대표컷으로 COALESCE 폴백한다
+      (display_order·media_id 순 첫 1건, 이미지도 없으면 null).
+    -->
+    <select id="selectUserPosts" resultType="com.helloworld.domain.post.dto.response.UserPostResponse">
+        SELECT
+            p.post_id AS post_id,
+            COALESCE(p.thumbnail_url, (
+                SELECT m.media_url
+                FROM post_medias m
+                WHERE m.post_id = p.post_id
+                  AND m.media_type = 'IMAGE'
+                ORDER BY m.display_order, m.media_id
+                LIMIT 1
+            )) AS thumbnail_url,
+            p.post_type AS post_type
+        FROM posts p
+        WHERE p.user_id = #{userId}
+        <if test="onlyPublic">
+            AND p.is_public = TRUE
+        </if>
+        <if test="cursor != null">
+            AND p.post_id &lt; #{cursor}
+        </if>
+        ORDER BY p.post_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 게시물 단건 조회 -->
+    <select id="selectById" resultType="com.helloworld.domain.post.entity.Post">
+        SELECT
+            post_id, user_id, post_type, content, thumbnail_url,
+            github_url, project_link, ai_summary,
+            view_count, like_count, comment_count, is_public,
+            created_at, updated_at
+        FROM posts
+        WHERE post_id = #{postId}
+    </select>
+
+    <!--
+      like_count 갱신 쿼리를 두지 않는다(팔로우와 같은 구조).
+      좋아요 반영이 부모 posts 행을 UPDATE하면 post_likes의 FK 검사가 잡는 S 락과
+      맞물려 데드락이 났고(동시 10건에서 8건 유실), +1/-1은 SQS 중복 전달에 멱등하지도 않았다.
+      카운트는 정본인 Redis에서 세고, 목록 조회는 실제 post_likes 행 수로 계산한다.
+      자세한 배경은 PostLikeRdbSyncer 자바독 참고.
+    -->
+
+</mapper>

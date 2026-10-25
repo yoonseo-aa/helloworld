@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.helloworld.domain.github.mapper.GithubMapper">
+
+    <!-- ===================== 연동 계정 ===================== -->
+
+    <select id="selectAccountByUserId" resultType="com.helloworld.domain.github.entity.GithubAccount">
+        SELECT github_account_id, user_id, github_id, github_login,
+               access_token, last_synced_at, created_at, updated_at
+        FROM github_accounts
+        WHERE user_id = #{userId}
+    </select>
+
+    <select id="selectAccountByGithubId" resultType="com.helloworld.domain.github.entity.GithubAccount">
+        SELECT github_account_id, user_id, github_id, github_login,
+               access_token, last_synced_at, created_at, updated_at
+        FROM github_accounts
+        WHERE github_id = #{githubId}
+    </select>
+
+    <!-- 배치 대상. 사용자가 많아지면 커서 페이징으로 나눠야 하지만,
+         현재 규모에서는 계정 수가 회원 수 이하라 한 번에 읽어도 부담이 없다. -->
+    <select id="selectAllAccounts" resultType="com.helloworld.domain.github.entity.GithubAccount">
+        SELECT github_account_id, user_id, github_id, github_login,
+               access_token, last_synced_at, created_at, updated_at
+        FROM github_accounts
+        ORDER BY github_account_id
+    </select>
+
+    <!--
+      재연동을 INSERT/UPDATE 분기로 나누면 그 사이에 같은 사용자가 두 번 요청했을 때
+      uk_github_accounts_user 위반으로 500이 난다. UPSERT 한 문장이면 DB가 원자적으로 처리한다.
+
+      last_synced_at은 여기서 건드리지 않는다 — 동기화가 성공한 시점에만 갱신되어야
+      "언제 기준 데이터인지"라는 의미가 유지된다.
+    -->
+    <insert id="upsertAccount">
+        INSERT INTO github_accounts
+            (user_id, github_id, github_login, access_token, created_at, updated_at)
+        VALUES
+            (#{userId}, #{githubId}, #{githubLogin}, #{accessToken}, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE
+            github_id    = VALUES(github_id),
+            github_login = VALUES(github_login),
+            access_token = VALUES(access_token),
+            updated_at   = NOW()
+    </insert>
+
+    <update id="updateLastSyncedAt">
+        UPDATE github_accounts
+        SET last_synced_at = NOW(),
+            github_login   = #{githubLogin},
+            updated_at     = NOW()
+        WHERE user_id = #{userId}
+    </update>
+
+    <delete id="deleteAccount">
+        DELETE FROM github_accounts WHERE user_id = #{userId}
+    </delete>
+
+    <!-- users.github_username 은 UNIQUE라, 같은 GitHub 계정을 두 회원이 붙이려 하면
+         DuplicateKeyException이 난다. Service가 이를 GITHUB_ALREADY_CONNECTED로 변환한다. -->
+    <update id="updateUserGithubUsername">
+        UPDATE users
+        SET github_username = #{githubUsername},
+            updated_at      = NOW()
+        WHERE user_id = #{userId}
+    </update>
+
+    <!-- ===================== 통계 (사용자당 1행) ===================== -->
+
+    <!--
+      매일 밤 1년치를 통째로 교체한다. 사용자당 1행이라 이 한 문장이 곧 원자적 교체이고,
+      날짜당 1행 구조에서 필요했던 "전부 삭제 후 다시 삽입" 같은 다단계 조작이 없다.
+      그래서 삭제만 되고 삽입이 실패해 잔디가 비는 중간 상태 자체가 생기지 않는다.
+
+      daily_commits / languages 는 애플리케이션이 만든 JSON 문자열을 그대로 넣는다.
+      MySQL이 JSON 컬럼에 넣을 때 파싱해서 유효성을 검사하므로, 깨진 JSON은 여기서 걸린다.
+    -->
+    <insert id="upsertStats">
+        INSERT INTO github_stats
+            (user_id, daily_commits, languages, active_days, total_commits,
+             period_from, period_to, updated_at)
+        VALUES
+            (#{userId}, #{dailyCommits}, #{languages}, #{activeDays}, #{totalCommits},
+             #{periodFrom}, #{periodTo}, NOW())
+        ON DUPLICATE KEY UPDATE
+            daily_commits = VALUES(daily_commits),
+            languages     = VALUES(languages),
+            active_days   = VALUES(active_days),
+            total_commits = VALUES(total_commits),
+            period_from   = VALUES(period_from),
+            period_to     = VALUES(period_to),
+            updated_at    = NOW()
+    </insert>
+
+    <!-- PK 단건 조회. JSON은 문자열로 받아 GithubStatsCodec이 파싱한다. -->
+    <select id="selectStats" resultType="com.helloworld.domain.github.entity.GithubStats">
+        SELECT user_id, daily_commits, languages, active_days, total_commits,
+               period_from, period_to, updated_at
+        FROM github_stats
+        WHERE user_id = #{userId}
+    </select>
+
+    <delete id="deleteStats">
+        DELETE FROM github_stats WHERE user_id = #{userId}
+    </delete>
+
+</mapper>

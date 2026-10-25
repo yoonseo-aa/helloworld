@@ -1,0 +1,61 @@
+### =====================================================================
+### 게시물 생성 API 테스트 (IntelliJ HTTP Client)
+### 사용법: 앱 실행 후, 각 요청 위의 초록 ▶ 버튼 클릭 → 아래에 응답이 뜬다.
+### (IntelliJ는 UTF-8로 보내므로 한글 안 깨짐)
+### =====================================================================
+
+### ① PROJECT 게시물 생성
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+
+{
+  "post_type": "PROJECT",
+  "content": "IntelliJ에서 직접 보낸 첫 게시물입니다.",
+  "thumbnail_url": "https://minio.example.com/post/thumb.png",
+  "github_url": "https://github.com/example/backend",
+  "deploy_url": "https://example.site",
+  "summary": "개발자를 위한 SNS 서비스",
+  "tech_stacks": ["Spring Boot", "React", "Redis"]
+}
+
+### ② CARD_NEWS 게시물 생성 (이미지 목록)
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+
+{
+  "post_type": "CARD_NEWS",
+  "content": "카드뉴스: Spring Security 핵심 정리",
+  "image_urls": [
+    "https://minio.example.com/post/1.png",
+    "https://minio.example.com/post/2.png",
+    "https://minio.example.com/post/3.png"
+  ]
+}
+
+### ③ 다른 사용자로 작성 (임시 인증 헤더 - 개발용)
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+X-Dev-User-Id: 1
+
+{
+  "post_type": "PROJECT",
+  "content": "X-Dev-User-Id 헤더로 작성자 지정 테스트",
+  "tech_stacks": ["Docker"]
+}
+
+### ④ 검증 실패 테스트 (post_type 잘못 → 400 FAIL이 정상)
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+
+{
+  "post_type": "WRONG",
+  "content": "이건 실패해야 정상"
+}
+
+### ⑤ 검증 실패 테스트 (content 누락 → 400 FAIL이 정상)
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+
+{
+  "post_type": "PROJECT"
+}

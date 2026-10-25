@@ -1,0 +1,88 @@
+server {
+    server_name i15e204.p.ssafy.io;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+
+        # 파일 업로드(POST /api/files). 기본값이 1MB라 5MB 이미지가 413으로 막힌다.
+        #
+        # 앱 한도(5MB)보다 "넉넉하게" 두는 이유: nginx가 먼저 거부하면 봉투 없는
+        # 413 HTML이 나가 프론트가 이유(FILE_TOO_LARGE)를 읽을 수 없다. 여유를 두면
+        # 크기 초과 판정을 앱이 하고 규약대로 400 + 코드로 응답한다.
+        # nginx는 "말도 안 되는 크기"만 막는 마지막 방어선 역할을 한다.
+        client_max_body_size 20m;
+    }
+
+    # 업로드된 이미지 제공. MinIO(9000)로 직접 넘겨 앱을 지나지 않게 한다.
+    # 피드에서 이미지 수십 개를 받아도 백엔드에 부하가 없고, 캐시도 nginx가 처리한다.
+    #
+    # 버킷 이름을 경로에 넣는 이유: MinIO의 객체 주소가 /{버킷}/{키} 형태다.
+    # /files/2026/08/x.png → http://127.0.0.1:9000/helloworld/2026/08/x.png
+    # 버킷은 공개 읽기(s3:GetObject)만 열려 있어 자격증명 없이 읽을 수 있고, 쓰기는 불가하다.
+    location /files/ {
+        proxy_pass http://127.0.0.1:9000/helloworld/;
+        proxy_set_header Host $host;
+
+        # 이미지는 바뀌지 않는다(키가 uuid라 같은 URL이 다른 내용이 될 수 없다).
+        # 브라우저가 오래 들고 있어도 안전하다.
+        # (nginx 자체 캐시는 쓰지 않는다 — proxy_cache_path 없이 proxy_cache_valid만 두면
+        #  아무 일도 하지 않는 죽은 설정이 되어 "캐시하고 있다"는 착각만 남는다)
+        add_header Cache-Control "public, max-age=2592000, immutable";
+
+        # MinIO의 XML 오류 응답을 그대로 보여줄 필요가 없다
+        proxy_intercept_errors on;
+        error_page 403 404 = @file_not_found;
+    }
+
+    location @file_not_found {
+        return 404;
+    }
+
+    location /ws {
+        proxy_pass http://127.0.0.1:8080;
+
+        # --- WebSocket 업그레이드 (이 3줄이 핵심) ---
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket은 오래 열려 있다. 기본 60초면 조용히 끊긴다.
+        proxy_read_timeout  3600s;
+        proxy_send_timeout  3600s;
+
+        # 실시간 메시지는 버퍼링하면 지연된다
+        proxy_buffering off;
+    }
+
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/i15e204.p.ssafy.io/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/i15e204.p.ssafy.io/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+
+}
+server {
+    if ($host = i15e204.p.ssafy.io) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+
+    listen 80;
+    server_name i15e204.p.ssafy.io;
+    return 404; # managed by Certbot
+
+
+}

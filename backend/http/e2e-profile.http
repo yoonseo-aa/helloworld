@@ -1,0 +1,59 @@
+### =====================================================================
+### E2E: 회원가입 → 로그인 → 태그 조회 → 프로필 생성
+### 위에서부터 순서대로 초록 ▶ 클릭. 로그인 토큰은 자동 저장되어 재사용됨.
+### 전제: MySQL(+샘플태그)·Redis 실행 중, 앱 실행 중.
+### 태그 id: TECH=1~5, DOMAIN=6~9, POSITION=10~12 (GET /api/tags 로 확인)
+### =====================================================================
+
+### 1) 회원가입 (이미 있으면 409 → 그냥 2)로그인으로)
+POST http://localhost:8080/api/users
+Content-Type: application/json
+
+{
+  "email": "myprofile@test.com",
+  "password": "test1234!"
+}
+
+### 2) 로그인 → access_token 자동 저장
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "myprofile@test.com",
+  "password": "test1234!"
+}
+
+> {% client.global.set("access_token", response.body.data.access_token); %}
+
+### 3) 셀렉트 박스용 태그 목록 (TECH / DOMAIN / POSITION 각각 조회 가능)
+GET http://localhost:8080/api/tags?type=TECH
+Authorization: Bearer {{access_token}}
+
+### 3-1) 전체 태그
+GET http://localhost:8080/api/tags
+Authorization: Bearer {{access_token}}
+
+### 4) 프로필 저장 (닉네임 + 사진 + 한줄소개 + 관심태그)
+POST http://localhost:8080/api/profiles
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "nickname": "내닉네임",
+  "profile_image_url": "https://minio.example.com/profile/me.png",
+  "introduce": "안녕하세요, 백엔드 공부 중입니다.",
+  "interest_tag_ids": [1, 3, 6, 10]
+}
+
+### 5) 아무것도 안 넣어도 완료 가능 (내용 없이 저장)
+POST http://localhost:8080/api/profiles
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{}
+
+### 6) (검증) 토큰 없이 프로필 저장 → 401 나야 정상
+POST http://localhost:8080/api/profiles
+Content-Type: application/json
+
+{ "nickname": "무단" }

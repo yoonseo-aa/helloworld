@@ -1,0 +1,192 @@
+spring:
+  profiles:
+    active: local        # 기본 프로파일 (실행 환경에 맞게 override)
+
+  jackson:
+    property-naming-strategy: SNAKE_CASE   # JSON 필드 snake_case 전역 변환 (규약)
+    default-property-inclusion: non_null
+
+  # 파일 업로드 크기. 기본값이 파일 1MB / 요청 10MB라 5MB 이미지가 그냥 막힌다.
+  # ⚠️ nginx의 client_max_body_size도 함께 올려야 한다(기본 1MB). 한쪽만 올리면
+  #    nginx가 413을 먼저 반환해 앱 설정이 무의미해진다 — 배포에서만 실패하는 종류다.
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB    # 파일 5MB + multipart 부가 데이터 여유
+
+  # 비밀번호 재설정 메일 발송(Gmail SMTP). 자격증명은 코드·커밋에 두지 않고 환경변수로만 받는다.
+  #  - 로컬: application-local.yml / 배포: .env → docker-compose
+  #  - 값이 비어도 앱은 정상 기동한다(JavaMailSender는 send() 시점에만 연결). 실제 발송 전환은 app.mail.enabled.
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_APP_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+
+# MyBatis 설정
+mybatis:
+  mapper-locations: classpath:mapper/**/*.xml
+  type-aliases-package: com.helloworld.domain
+  configuration:
+    map-underscore-to-camel-case: true     # DB snake_case ↔ Java camelCase 자동 매핑
+
+# Swagger
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    persist-authorization: true      # Authorize에 넣은 토큰을 새로고침해도 유지 (매번 재입력 안 해도 됨)
+    try-it-out-enabled: true         # 'Try it out' 버튼을 누르지 않아도 바로 입력 가능
+    display-request-duration: true   # 응답에 걸린 시간 표시
+    tags-sorter: alpha               # 컨트롤러 목록 알파벳순 정렬
+    operations-sorter: method        # 같은 경로 내 메서드 순 정렬
+
+# JWT (값은 프로파일/환경변수에서 주입. 여기 기본값은 로컬 개발용 placeholder)
+jwt:
+  secret: ${JWT_SECRET:local-dev-secret-please-change-this-to-a-long-random-string}
+  access-token-validity-ms: 1800000        # 30분
+  refresh-token-validity-ms: 1209600000    # 14일
+
+# 인증 부가 설정
+auth:
+  # Refresh Token 쿠키의 보안 속성. 여기 값은 배포(HTTPS) 기준이다.
+  # 로컬은 http라서 Secure=true면 브라우저가 쿠키를 저장하지 않으므로
+  # application-local.yml 에서 secure: false / same-site: Lax 로 덮어쓴다.
+  # (배포에서 바꿔야 하면 환경변수 AUTH_REFRESH_COOKIE_SAME_SITE 등으로 주입)
+  refresh-cookie:
+    secure: true
+    same-site: None
+
+# 소셜 로그인(구글). client-id/secret은 환경변수로 주입한다.
+#  - 배포: docker-compose environment(OAUTH_GOOGLE_*) ← 루트 .env
+#  - 로컬: application-local.yml 에서 채움
+#  - token/userinfo URI는 구글 공용 엔드포인트라 고정. client-secret은 코드/커밋에 두지 않는다.
+oauth:
+  google:
+    client-id: ${OAUTH_GOOGLE_CLIENT_ID:}
+    client-secret: ${OAUTH_GOOGLE_CLIENT_SECRET:}
+    token-uri: https://oauth2.googleapis.com/token
+    userinfo-uri: https://www.googleapis.com/oauth2/v3/userinfo
+  # GitHub 연동(잔디). client-id/secret/암호화 키는 환경변수로 주입한다.
+  #  - GitHub OAuth App은 Settings > Developer settings > OAuth Apps 에서 발급
+  #  - 인가 요청 scope는 "read:user repo" 다. private 저장소 커밋까지 잔디에 포함하려면
+  #    repo가 필요하다(GitHub OAuth App에는 private 읽기 전용 scope가 없어서, repo는
+  #    읽기/쓰기를 한 덩어리로 요구한다 — 읽기만 원하면 GitHub App으로 가야 하는데
+  #    사용자 토큰이 8시간 만료라 매일 도는 배치와 궁합이 나빠 채택하지 않았다).
+  #  - 인가 URL은 프론트가 만든다. scope를 줄이려면 프론트와 함께 바꿔야 한다.
+  #  - token-encryption-key: access_token을 AES-GCM으로 암호화해 저장할 대칭키.
+  #    Base64 인코딩된 32바이트. 생성: openssl rand -base64 32
+  #    ⚠️ 이 키를 바꾸면 기존에 저장된 토큰을 전부 복호화할 수 없게 되어(=재연동 필요),
+  #       사용자들의 잔디 동기화가 조용히 멈춘다. 교체는 재연동 안내와 함께 진행할 것.
+  github:
+    client-id: ${OAUTH_GITHUB_CLIENT_ID:}
+    client-secret: ${OAUTH_GITHUB_CLIENT_SECRET:}
+    authorize-uri: https://github.com/login/oauth/authorize
+    token-uri: https://github.com/login/oauth/access_token
+    graphql-uri: https://api.github.com/graphql
+    token-encryption-key: ${GITHUB_TOKEN_ENC_KEY:}
+    # GitHub이 승인 후 브라우저를 되돌려 보낼 주소(= 우리 백엔드 콜백).
+    # GitHub OAuth App에 등록한 Authorization callback URL과 문자 하나까지 같아야 한다.
+    # OAuth App은 콜백 URL을 하나만 받으므로 로컬용·배포용 앱을 따로 만든다.
+    # 로컬 기본값이 3000(프론트)인 이유: vite dev 서버가 /api 를 8080으로 프록시한다.
+    # 브라우저에서 보이는 오리진이 배포(nginx)와 같아져, "로컬에선 되는데 배포에서 안 됨"을 막는다.
+    redirect-uri: ${OAUTH_GITHUB_REDIRECT_URI:http://localhost:3000/api/github/callback}
+    scope: read:user repo
+    # 연동을 마친 뒤 사용자를 되돌려 보낼 프론트 주소. 여기에 /users/{userId}를 붙인다.
+    # 프론트는 3000 고정이다(vite.config.ts의 strictPort: true — 5173이 아니다).
+    front-base-url: ${APP_FRONT_BASE_URL:http://localhost:3000}
+
+# 게시물 요약이 저장소 정보를 읽을 때 쓰는 서버용 GitHub 토큰.
+#  - 비어 있어도 공개 저장소는 읽히지만, 익명은 레이트리밋이 IP당 시간당 60회라
+#    게시물이 조금만 몰려도 막힌다. 토큰을 넣으면 5000회가 된다.
+#  - 권한은 public repo 읽기만 있으면 충분하다(조회만 한다).
+#  - 사용자 개인 토큰이 아니라 서버 토큰이므로 비공개 저장소는 읽지 못한다.
+github:
+  api-token: ${GITHUB_API_TOKEN:}
+
+
+# 프로젝트 요약(게시물의 GitHub README → 구조화 요약). 값은 환경변수로 주입한다.
+#  - api-key 에는 SSAFY GMS 키를 넣는다(OpenAI 직접 발급 키가 아니다).
+#    비어 있으면 요약 단계를 통째로 건너뛴다. 키가 없는 팀원의 로컬에서도
+#    게시물 작성은 정상 동작하고 ai_summary 만 비어 있게 된다.
+#  - model: 게시물마다 호출되므로 비용이 누적된다. 품질을 확인한 뒤 더 저렴한 모델로
+#    내릴 수 있게 설정으로 뺐다.
+#  - max-readme-chars: README를 이 길이까지만 보낸다. 프로젝트 소개는 대개 앞부분에 있고
+#    뒤쪽은 설치 방법·라이선스라 요약에 보탬이 안 되는데 토큰만 쓴다.
+openai:
+  enabled: ${OPENAI_ENABLED:true}
+  api-key: ${OPENAI_API_KEY:}
+  # SSAFY GMS 프록시. OpenAI 공식 주소가 아니라 여기를 거쳐야 크레딧이 차감된다.
+  # 경로 규칙: https://gms.ssafy.io/gmsapi/<원래 호스트>/<원래 경로>
+  base-url: ${OPENAI_BASE_URL:https://gms.ssafy.io/gmsapi/api.openai.com/v1}
+  # -pro 계열은 쓸 수 없다. Responses API 전용이라 아래 chat/completions 경로에서
+  # "This is not a chat model"로 404가 떨어진다(2026-08-07 실측).
+  model: ${OPENAI_MODEL:gpt-5.5}
+  max-readme-chars: ${OPENAI_MAX_README_CHARS:12000}
+
+
+# GitHub 잔디 동기화 배치(매일 새벽 3시).
+#  - 서버를 여러 대로 늘리면 인스턴스마다 배치가 돌아 GitHub 호출이 중복된다.
+#    저장은 UPSERT라 데이터는 안전하지만, 그때는 한 대만 남기고 나머지를
+#    APP_GITHUB_SYNC_ENABLED=false 로 끄거나 분산 락을 도입한다.
+#
+# 좋아요 RDB 반영 경로.
+#  - 꺼짐(기본): toggleLike()가 RDB를 동기로 반영한다. SQS 없이도 좋아요 목록이 정상 동작한다.
+#  - 켜짐: SQS로 발행하고 Worker가 비동기로 반영한다. 코드 수정 없이 환경변수만으로 전환된다.
+#
+# ⚠️ 큐와 IAM 권한이 실제로 준비된 뒤에만 켠다. 큐 없이 켜면 앱은 반드시 죽는다(측정으로 확인):
+#      ApplicationContextException: Failed to start bean '...internalEndpointRegistryBeanName'
+#        Caused by: QueueAttributesResolvingException: Error resolving attributes for queue
+#                   helloworld-post-like-events with strategy CREATE
+#    SQS 리스너 컨테이너는 기동 시점에 큐를 해석하고, 실패하면 컨텍스트가 통째로 취소된다.
+#    spring-cloud-aws 3.1.1에는 이를 완화할 queue-not-found-strategy 프로퍼티가 없다
+#    (사용 가능한 것은 spring.cloud.aws.sqs 의 enabled/endpoint/listener.*/region 뿐).
+#    전략을 FAIL로 바꾸려면 SqsMessageListenerContainerFactory 빈을 직접 등록해야 하는데,
+#    그래도 "큐가 없으면 기동 실패"라는 결말은 같다 — 에러 메시지만 명확해진다.
+#    그래서 PostLikeSqsPreflight가 기동 시 GetQueueUrl로 미리 확인해, 죽기 직전에
+#    "큐 '...' 를 찾을 수 없다"는 한 줄을 남긴다(원인 파악이 스택트레이스 뒤짐에서 로그 한 줄로 줄었다).
+#
+# 좋아요 RDB 재동기화 러너(app.post-like.resync.enabled)는 여기에 값을 두지 않는다.
+# 복구가 필요할 때만 APP_POST_LIKE_RESYNC_ENABLED=true 로 한 번 켰다가 되돌린다.
+#
+# ⚠️ app 은 최상위 키라 한 번만 나와야 한다. 두 번 쓰면 뒤엣것이 앞엣것을 통째로 덮어써서
+#    먼저 선언한 하위 설정이 조용히 사라진다(rebase 충돌 해결 중 실제로 겪었다).
+app:
+  # 프론트 기본 주소. 비밀번호 재설정 메일 링크의 앞부분({base}/password/reset?token=...)에 쓴다.
+  # github front-base-url과 같은 env(APP_FRONT_BASE_URL)를 재사용한다.
+  frontend:
+    base-url: ${APP_FRONT_BASE_URL:http://localhost:3000}
+
+  # 재설정 링크 전달 방식. false(기본)=로그 출력(LogResetLinkSender, 개발) / true=Gmail 실발송(GmailResetLinkSender).
+  # SQS enabled 플래그와 같은 방식. true로 켤 땐 MAIL_USERNAME/MAIL_APP_PASSWORD가 채워져 있어야 한다.
+  mail:
+    enabled: ${MAIL_ENABLED:false}
+
+  github:
+    sync:
+      enabled: ${APP_GITHUB_SYNC_ENABLED:true}
+
+  sqs:
+    post-like:
+      enabled: ${SQS_POST_LIKE_ENABLED:false}
+      queue: ${SQS_POST_LIKE_QUEUE:helloworld-post-like-events}
+
+  # 파일 저장(MinIO). 자격증명은 코드·커밋에 두지 않고 환경변수로만 받는다.
+  #
+  # public-base-url: 브라우저가 이미지를 받아갈 주소의 접두어.
+  #   응답 file_url = {public-base-url}/{객체 키} 로 만들어진다.
+  #   nginx가 이 경로를 MinIO(9000)로 프록시하므로 이미지 트래픽이 앱을 지나지 않는다.
+  #   ⚠️ MinIO 주소(:9000)를 그대로 내려주면 안 된다 — HTTPS가 아니라 브라우저가
+  #      혼합 콘텐츠로 차단하고, 포트가 열려 있다는 사실도 노출된다.
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${MINIO_SECRET_KEY:minioadmin}
+    bucket: ${MINIO_BUCKET:helloworld}
+    public-base-url: ${MINIO_PUBLIC_BASE_URL:http://localhost:9000/helloworld}

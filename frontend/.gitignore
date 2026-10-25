@@ -1,0 +1,36 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# env secrets — 예시 파일만 커밋한다
+.env
+.env.*
+!.env.example
+
+# 로컬 툴 상태 저장소 (바이너리 블롭) — 커밋 금지
+data/
+
+# 디자인 시안 원본(front.zip을 풀어놓는 자리) — 산출물이 아니라 참고 자료라 커밋하지 않는다.
+# 코드 주석이 이 경로를 참조한다(예: handoff/src/features/profile/…). 자세한 내용은 README 참고.
+handoff/

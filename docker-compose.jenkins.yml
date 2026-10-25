@@ -1,0 +1,20 @@
+# Jenkins 전용 compose 파일. 앱 스택(docker-compose.yml)과 분리해서
+# 앱을 재배포해도 Jenkins 컨테이너는 계속 떠 있도록 함.
+#
+# network_mode: host 를 쓰는 이유: Jenkins 파이프라인이 배포 단계에서
+# SSH로 "이 EC2 자기 자신"에 접속해 docker compose 명령을 실행하는데,
+# host 네트워크를 써야 컨테이너 안에서 localhost로 호스트의 sshd에 붙을 수 있음.
+services:
+  jenkins:
+    build:
+      context: ./infra/jenkins
+    container_name: jenkins
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      JENKINS_OPTS: "--httpPort=8081"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+
+volumes:
+  jenkins_home:

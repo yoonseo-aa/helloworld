@@ -1,0 +1,38 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Eclipse / VSCode
+.classpath
+.project
+.settings/
+.vscode/
+
+# 민감정보 · 로컬 설정 (커밋 금지)
+application-local.yml
+application-dev.yml
+application-prod.yml
+*.env
+.env
+
+# 로그
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 배포용 임시 압축 파일
+*.tar.gz
+
+# Claude Code 로컬 설정 (개인용, 커밋 금지)
+.claude/settings.local.json
+공통 - Sub PJT 1 중간 평가/
+exec/helloworld_dump.sql

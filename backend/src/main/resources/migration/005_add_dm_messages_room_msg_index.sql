@@ -1,0 +1,32 @@
+-- =====================================================================
+-- 005. dm_messages (room_id, message_id, sender_id) 인덱스 추가
+--
+-- 배경: 대화 목록 조회(GET /api/chat/rooms)가 방마다 두 가지를 계산한다.
+--   1) 마지막 메시지  → SELECT MAX(message_id) WHERE room_id = ?
+--   2) 안읽음 수      → COUNT(*) WHERE room_id = ? AND sender_id <> ? AND message_id > ?
+--
+-- 기존 인덱스는 (room_id, created_at)뿐이어서 둘 다 비효율적이었다.
+-- EXPLAIN 결과 MySQL이 그 인덱스로 "해당 방의 전체 항목"을 스캔했다.
+-- created_at 순서와 message_id 순서가 같다는 것을 MySQL은 모르기 때문이다.
+--
+-- 즉 비용이 "방에 쌓인 전체 메시지 수"에 비례했다. 방 20개 × 방당 1만 건이면
+-- 목록 화면 한 번에 인덱스 항목 수십만 건을 훑는다. 사용량과 함께 조용히 느려지는
+-- 종류라 나중에 원인을 찾기 어렵다.
+--
+-- 이 인덱스가 있으면
+--   - MAX(message_id): 인덱스 끝에서 한 건만 읽는다(스캔 없음)
+--   - 안읽음 COUNT: message_id > last_read 범위만 읽는다 → "안읽은 건수"에만 비례
+--   - sender_id가 인덱스에 포함되어 테이블 접근 없이 판정(커버링 인덱스)
+--
+-- 기존 (room_id, created_at)은 메시지 목록 시각 정렬에 쓰이므로 그대로 둔다.
+--
+-- 데이터를 바꾸지 않는 인덱스 추가라 되돌리기도 안전하다:
+--   ALTER TABLE dm_messages DROP INDEX idx_dm_messages_room_msg;
+--
+-- 메시지가 적은 지금 적용하는 것이 유리하다(행이 많아지면 ALTER에 시간이 걸린다).
+--
+-- 적용: 운영 DB / 각자 로컬 DB에 한 번씩 실행
+-- =====================================================================
+
+ALTER TABLE dm_messages
+    ADD INDEX idx_dm_messages_room_msg (room_id, message_id, sender_id);

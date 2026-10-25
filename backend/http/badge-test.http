@@ -1,0 +1,37 @@
+### =====================================================================
+### 배지(업적) 조회 테스트
+### 4축(게시 · 받은 좋아요 · 댓글 · GitHub) × 3티어 = 12종.
+### 저장하지 않고 조회 시점에 계산하므로, 글을 쓰거나 지우면 바로 다음 호출에 반영된다.
+### 전제: MySQL·Redis 실행 중, 앱 실행 중.
+### =====================================================================
+
+### 1) 로그인 → access_token 자동 저장
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "myprofile@test.com",
+  "password": "test1234!"
+}
+
+> {% client.global.set("access_token", response.body.data.access_token); %}
+
+### 2) 내 배지 (달성한 것만, 축별 최고 등급 하나씩 — 최대 4개)
+### 활동이 없으면 빈 배열이 정상이다.
+GET http://localhost:8080/api/users/1/badges
+Authorization: Bearer {{access_token}}
+
+### 3) 타인 배지 — 남의 프로필에서도 보여야 하므로 본인 여부와 무관하게 조회된다
+GET http://localhost:8080/api/users/2/badges
+Authorization: Bearer {{access_token}}
+
+### =====================================================================
+### 확인 포인트
+###
+### - 게시 축은 공개 글(is_public=TRUE)만 센다. 비공개로 쓴 글은 배지에 반영되지 않는다.
+### - 받은 좋아요는 posts.like_count 합계다. 좋아요를 눌렀는데 값이 안 오르면
+###   SQS Worker 가 캐시 컬럼을 갱신하지 못한 것이므로 배지가 아니라 그쪽을 봐야 한다.
+### - 댓글은 소프트 삭제(is_deleted)를 제외한다.
+### - GitHub 축은 github_stats.active_days(최근 1년 커밋한 날 수, 누적)를 본다.
+###   미연동이면 0이라 배지가 없는 게 정상이다.
+### =====================================================================

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      ?v= 는 캐시 버스터다. 크롬은 파비콘을 일반 HTTP 캐시가 아니라 프로필의 별도
+      Favicons DB에 URL 단위로 보관하고, 강력 새로고침(Ctrl+Shift+R)으로도 지우지 않는다.
+      파일 내용만 바꾸고 경로를 그대로 두면 기존 방문자에게는 옛 아이콘이 계속 보인다.
+      **파비콘 그림을 바꿀 때마다 이 숫자를 올린다.** (public/은 Vite가 해시를 안 붙인다)
+    -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=2" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hello World</title>
+    <!-- 시안(front.zip handoff)과 동일한 웹폰트. 셀프호스팅 전환 시 이 블록을 로컬 @font-face로 교체 -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap"
+    />
+  </head>
+  <body>
+    <!--
+      테마를 **첫 페인트 전에** 적용한다. React가 붙은 뒤에 적용하면 밝은 화면이 한 번
+      그려졌다 어두워지는 깜빡임(FOUC)이 보인다 — 다크를 쓰는 사람에게는 매 진입마다 눈에 띈다.
+      판정 규칙은 src/hooks/useTheme.ts의 readInitialTheme과 같아야 한다(저장값 → OS 설정).
+    -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('hw-theme')
+          var theme =
+            saved === 'light' || saved === 'dark'
+              ? saved
+              : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+          document.documentElement.setAttribute('data-theme', theme)
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'light')
+        }
+      })()
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

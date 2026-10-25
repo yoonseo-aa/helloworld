@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.helloworld.domain.like.mapper.PostLikeMapper">
+
+    <!--
+      좋아요 등록.
+      [학습 포인트] INSERT IGNORE + uk_post_likes(post_id, user_id)
+       - Redis에서 이미 원자적으로 토글을 끝낸 뒤 비동기로 RDB에 반영하는 단계라,
+         혹시 중복 이벤트가 와도(SQS at-least-once) 유니크 제약 덕분에 안전하게 무시된다.
+    -->
+    <insert id="insertLikeIfAbsent">
+        INSERT IGNORE INTO post_likes (post_id, user_id, created_at)
+        VALUES (#{postId}, #{userId}, NOW())
+    </insert>
+
+    <!-- 좋아요 취소 (hard delete, 규약) -->
+    <delete id="deleteLike">
+        DELETE FROM post_likes
+        WHERE post_id = #{postId} AND user_id = #{userId}
+    </delete>
+
+    <!--
+      좋아요 누른 사용자 목록. 최신순(like_id DESC), 커서 기반.
+      [학습 포인트] cursor가 없으면(첫 페이지) 전체에서, 있으면 그보다 작은 like_id부터.
+    -->
+    <select id="selectLikersByPost" resultType="com.helloworld.domain.like.dto.response.PostLikerResponse">
+        SELECT
+            pl.like_id           AS likeId,
+            u.user_id            AS userId,
+            u.nickname           AS nickname,
+            u.profile_image_url  AS profileImageUrl
+        FROM post_likes pl
+        JOIN users u ON u.user_id = pl.user_id
+        WHERE pl.post_id = #{postId}
+        <if test="cursor != null">
+            AND pl.like_id &lt; #{cursor}
+        </if>
+        ORDER BY pl.like_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      특정 사용자가 좋아요 누른 게시물 목록. post_likes 기준으로 posts/작성자(users)를 JOIN.
+      좋아요 누른 순(최신순) = pl.like_id DESC, 커서 기반.
+    -->
+    <select id="selectLikedPostsByUser" resultType="com.helloworld.domain.like.dto.response.LikedPostResponse">
+        SELECT
+            pl.like_id              AS likeId,
+            p.post_id               AS postId,
+            p.post_type              AS postType,
+            p.content                AS content,
+            <!--
+              대표컷. posts.thumbnail_url 은 PROJECT 글의 프로젝트 썸네일이고,
+              CARD_NEWS 글은 이미지가 post_medias 에 들어가 이 컬럼이 NULL이다.
+              그대로 내리면 카드뉴스 게시물은 목록에서 대표컷이 전부 비어 보인다(실측 확인).
+              그래서 없으면 첫 이미지(display_order 최소)로 대체한다.
+              idx_post_medias_post(post_id)가 있어 행당 한 건만 읽는다.
+            -->
+            COALESCE(
+                p.thumbnail_url,
+                (SELECT m.media_url
+                   FROM post_medias m
+                  WHERE m.post_id = p.post_id
+                    AND m.media_type = 'IMAGE'
+                  ORDER BY m.display_order, m.media_id
+                  LIMIT 1)
+            )                        AS thumbnailUrl,
+            <!--
+              posts.like_count 컬럼을 쓰지 않는 이유: 그 컬럼은 더 이상 갱신되지 않는다.
+              좋아요 반영이 부모 posts 행을 UPDATE하면 데드락이 나서(PostLikeRdbSyncer 참고)
+              팔로우처럼 "관계 행만 남기고 카운트는 세는" 구조로 바꿨다.
+              여기서는 실제 행 수를 센다 — idx_post_likes_post_cursor(post_id, like_id)가
+              커버하는 인덱스 전용 카운트라 페이지당 20건 기준 비용이 작다.
+              (피드·상세처럼 정확·실시간이 중요한 곳은 Redis에서 읽는다)
+            -->
+            (SELECT COUNT(*) FROM post_likes c WHERE c.post_id = p.post_id) AS likeCount,
+            p.comment_count          AS commentCount,
+            u.user_id                AS authorId,
+            u.nickname                AS authorNickname,
+            u.profile_image_url       AS authorProfileImageUrl,
+            pl.created_at            AS likedAt,
+            p.created_at             AS postCreatedAt
+        FROM post_likes pl
+        JOIN posts p ON p.post_id = pl.post_id
+        JOIN users u ON u.user_id = p.user_id
+        WHERE pl.user_id = #{userId}
+        <if test="cursor != null">
+            AND pl.like_id &lt; #{cursor}
+        </if>
+        ORDER BY pl.like_id DESC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

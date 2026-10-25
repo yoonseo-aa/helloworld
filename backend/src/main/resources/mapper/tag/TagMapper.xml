@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.helloworld.domain.tag.mapper.TagMapper">
+
+    <!-- type 지정 시 해당 유형만, 없으면 전체. 유형·이름 순 정렬 -->
+    <select id="selectTags" resultType="com.helloworld.domain.tag.entity.Tag">
+        SELECT tag_id, tag_type, tag_name
+        FROM tags
+        <where>
+            <if test="tagType != null and tagType != ''">
+                tag_type = #{tagType}
+            </if>
+        </where>
+        ORDER BY tag_type, tag_name
+    </select>
+
+</mapper>

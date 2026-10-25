@@ -1,0 +1,103 @@
+### =====================================================================
+### E2E: 채팅 — 회원가입 → 로그인 → 채팅방 생성/재사용
+### 위에서부터 순서대로 초록 ▶ 클릭. 로그인 토큰은 자동 저장되어 재사용됨.
+### 전제: MySQL·Redis 실행 중, 앱 실행 중.
+###
+### 1단계(REST) 검증용. WebSocket(메시지 송수신)은 2단계에서 추가.
+### =====================================================================
+
+### 1) 나 회원가입 (이미 있으면 409 → 그냥 3)로그인으로)
+POST http://localhost:8080/api/users
+Content-Type: application/json
+
+{
+  "email": "chat-me@test.com",
+  "password": "test1234!"
+}
+
+### 2) 상대 회원가입 (대화 상대 만들기. user_id 메모해둘 것)
+POST http://localhost:8080/api/users
+Content-Type: application/json
+
+{
+  "email": "chat-you@test.com",
+  "password": "test1234!"
+}
+
+### 3) 나로 로그인 → access_token 자동 저장
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "chat-me@test.com",
+  "password": "test1234!"
+}
+
+> {% client.global.set("access_token", response.body.data.access_token);
+     client.global.set("my_user_id", response.body.data.user.user_id); %}
+
+### 4) 상대로 로그인 → 상대 user_id 확보 (토큰은 저장하지 않음)
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "chat-you@test.com",
+  "password": "test1234!"
+}
+
+> {% client.global.set("target_user_id", response.body.data.user.user_id); %}
+
+### 5) 채팅방 생성 → is_new: true 여야 정상
+POST http://localhost:8080/api/chat/rooms
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "target_user_ids": [{{target_user_id}}]
+}
+
+> {% client.global.set("room_id", response.body.data.room_id); %}
+
+### 6) 같은 상대로 다시 생성 → 방이 늘지 않고 is_new: false + 같은 room_id (멱등)
+POST http://localhost:8080/api/chat/rooms
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "target_user_ids": [{{target_user_id}}]
+}
+
+### 7) (검증) 자기 자신과 대화 시도 → 400 CHAT_CANNOT_INVITE_SELF
+POST http://localhost:8080/api/chat/rooms
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "target_user_ids": [{{my_user_id}}]
+}
+
+### 8) (검증) 없는 사용자 → 404 USER_NOT_FOUND
+POST http://localhost:8080/api/chat/rooms
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "target_user_ids": [999999]
+}
+
+### 9) (검증) 빈 배열 → 400
+POST http://localhost:8080/api/chat/rooms
+Content-Type: application/json
+Authorization: Bearer {{access_token}}
+
+{
+  "target_user_ids": []
+}
+
+### 10) (검증) 토큰 없이 → 401
+POST http://localhost:8080/api/chat/rooms
+Content-Type: application/json
+
+{
+  "target_user_ids": [{{target_user_id}}]
+}

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  댓글 좋아요 SQL. #{...} 바인딩만 사용(${...} 금지 — SQL Injection).
+  PostLikeMapper.xml 과 대칭(post_likes → comment_likes).
+-->
+<mapper namespace="com.helloworld.domain.like.mapper.CommentLikeMapper">
+
+    <!-- 좋아요 대상 검증: 존재 + 미삭제 댓글만 -->
+    <select id="existsActiveComment" resultType="boolean">
+        SELECT EXISTS(
+            SELECT 1 FROM comments
+            WHERE comment_id = #{commentId} AND is_deleted = FALSE
+        )
+    </select>
+
+    <!--
+      좋아요 등록.
+      INSERT IGNORE + uk_comment_likes(comment_id, user_id):
+       Redis에서 원자적 토글을 끝낸 뒤 비동기 반영 단계라, 중복 이벤트(SQS at-least-once)가 와도
+       유니크 제약 덕분에 안전하게 무시된다(멱등).
+    -->
+    <insert id="insertLikeIfAbsent">
+        INSERT IGNORE INTO comment_likes (comment_id, user_id, created_at)
+        VALUES (#{commentId}, #{userId}, NOW())
+    </insert>
+
+    <!-- 좋아요 취소 (hard delete, 규약) -->
+    <delete id="deleteLike">
+        DELETE FROM comment_likes
+        WHERE comment_id = #{commentId} AND user_id = #{userId}
+    </delete>
+
+</mapper>
